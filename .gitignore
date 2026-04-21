@@ -1,0 +1,40 @@
+# Environments
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Python / Backend
+backend/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/.pytest_cache/
+backend/.coverage
+backend/htmlcov/
+backend/venv/
+backend/.venv/
+backend/env/
+backend/pip-log.txt
+backend/pip-delete-this-directory.txt
+backend/*.log
+
+# Node / Next.js / Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# Supabase
+supabase/.temp/
+supabase/.branch/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp

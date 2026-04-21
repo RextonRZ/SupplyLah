@@ -1,0 +1,253 @@
+"""Supabase data access layer — all DB reads/writes go through here."""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from supabase import create_client, Client
+
+from app.config import get_settings
+from app.models.schemas import CustomerRow, OrderRow, OrderStatus, ProductRow
+
+logger = logging.getLogger(__name__)
+
+_client: Client | None = None
+
+
+def get_supabase() -> Client:
+    global _client
+    if _client is None:
+        s = get_settings()
+        _client = create_client(s.supabase_url, s.supabase_service_key)
+    return _client
+
+
+# ─────────────────────────────────────────
+# Customer
+# ─────────────────────────────────────────
+
+async def get_or_create_customer(whatsapp_number: str, merchant_id: str) -> CustomerRow:
+    db = get_supabase()
+    result = (
+        db.table("customer")
+        .select("*")
+        .eq("whatsapp_number", whatsapp_number)
+        .eq("merchant_id", merchant_id)
+        .maybe_single()
+        .execute()
+    )
+    if result.data:
+        return CustomerRow(**result.data)
+
+    new = (
+        db.table("customer")
+        .insert({"whatsapp_number": whatsapp_number, "merchant_id": merchant_id})
+        .execute()
+    )
+    return CustomerRow(**new.data[0])
+
+
+async def update_customer_name(customer_id: str, name: str) -> None:
+    get_supabase().table("customer").update({"customer_name": name}).eq("customer_id", customer_id).execute()
+
+
+# ─────────────────────────────────────────
+# Orders
+# ─────────────────────────────────────────
+
+async def get_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Awaiting Confirmation order for this customer, if any."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.AWAITING_CONFIRMATION.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return OrderRow(**result.data[0])
+    return None
+
+
+async def create_order(
+    customer_id: str,
+    merchant_id: str,
+    order_amount: Optional[float],
+    order_notes: Optional[str],
+    confidence_score: Optional[float],
+    requires_human_review: bool,
+    status: OrderStatus = OrderStatus.PENDING,
+) -> OrderRow:
+    row = (
+        get_supabase()
+        .table("order")
+        .insert({
+            "customer_id": customer_id,
+            "merchant_id": merchant_id,
+            "order_amount": order_amount,
+            "order_notes": order_notes,
+            "confidence_score": confidence_score,
+            "requires_human_review": requires_human_review,
+            "order_status": status.value,
+        })
+        .execute()
+    )
+    return OrderRow(**row.data[0])
+
+
+async def update_order_status(order_id: str, status: OrderStatus, **extra) -> None:
+    payload = {"order_status": status.value, **extra}
+    if status == OrderStatus.CONFIRMED:
+        from datetime import datetime, timezone
+        payload["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+    get_supabase().table("order").update(payload).eq("order_id", order_id).execute()
+
+
+async def create_order_items(order_id: str, items: list[dict]) -> None:
+    rows = [{"order_id": order_id, **item} for item in items]
+    get_supabase().table("order_item").insert(rows).execute()
+
+
+async def get_order_items(order_id: str) -> list[dict]:
+    result = (
+        get_supabase()
+        .table("order_item")
+        .select("*")
+        .eq("order_id", order_id)
+        .execute()
+    )
+    return result.data or []
+
+
+# ─────────────────────────────────────────
+# Products
+# ─────────────────────────────────────────
+
+async def get_products(merchant_id: str) -> list[ProductRow]:
+    result = (
+        get_supabase()
+        .table("product")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .execute()
+    )
+    return [ProductRow(**r) for r in (result.data or [])]
+
+
+async def get_product_by_id(product_id: str) -> Optional[ProductRow]:
+    result = (
+        get_supabase()
+        .table("product")
+        .select("*")
+        .eq("product_id", product_id)
+        .maybe_single()
+        .execute()
+    )
+    if result.data:
+        return ProductRow(**result.data)
+    return None
+
+
+async def deduct_stock(product_id: str, qty: int) -> bool:
+    """Atomically deduct stock. Returns False if insufficient stock."""
+    product = await get_product_by_id(product_id)
+    if not product or product.stock_quantity < qty:
+        return False
+    new_qty = product.stock_quantity - qty
+    get_supabase().table("product").update({"stock_quantity": new_qty}).eq("product_id", product_id).execute()
+    return True
+
+
+# ─────────────────────────────────────────
+# Logistics
+# ─────────────────────────────────────────
+
+async def create_logistic(
+    order_id: str,
+    provider: str,
+    tracking_url: str,
+    estimated_price: float,
+    eta_minutes: int,
+) -> str:
+    row = (
+        get_supabase()
+        .table("logistic")
+        .insert({
+            "order_id": order_id,
+            "provider_name": provider,
+            "tracking_url": tracking_url,
+            "logistic_status": "Booked",
+            "estimated_price": estimated_price,
+            "eta_minutes": eta_minutes,
+        })
+        .execute()
+    )
+    return row.data[0]["delivery_id"]
+
+
+# ─────────────────────────────────────────
+# Conversation log
+# ─────────────────────────────────────────
+
+async def log_message(
+    customer_id: str,
+    sender_type: str,
+    message_type: str,
+    content: str,
+    order_id: Optional[str] = None,
+    media_url: Optional[str] = None,
+) -> None:
+    get_supabase().table("conversation_log").insert({
+        "customer_id": customer_id,
+        "order_id": order_id,
+        "sender_type": sender_type,
+        "message_type": message_type,
+        "content": content,
+        "media_url": media_url,
+    }).execute()
+
+
+# ─────────────────────────────────────────
+# Dashboard queries
+# ─────────────────────────────────────────
+
+async def get_orders_with_details(merchant_id: str, limit: int = 100) -> list[dict]:
+    """Return orders joined with customer info and items for dashboard."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*, customer(customer_name, whatsapp_number), order_item(*)")
+        .eq("merchant_id", merchant_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []
+
+
+async def get_inventory(merchant_id: str) -> list[dict]:
+    result = (
+        get_supabase()
+        .table("product")
+        .select("product_id, product_name, product_sku, stock_quantity, unit_price")
+        .eq("merchant_id", merchant_id)
+        .order("product_name")
+        .execute()
+    )
+    return result.data or []
+
+
+async def get_knowledge_base_rules(merchant_id: str) -> str:
+    """Return concatenated business rules text for RAG injection."""
+    result = (
+        get_supabase()
+        .table("knowledge_base")
+        .select("content")
+        .eq("merchant_id", merchant_id)
+        .eq("document_type", "business_rules")
+        .execute()
+    )
+    return "\n\n".join(r["content"] for r in (result.data or []))

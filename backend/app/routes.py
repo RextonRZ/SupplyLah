@@ -1,0 +1,90 @@
+"""Dashboard API routes — order management, inventory, stats."""
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from app.config import get_settings
+from app.models.schemas import DashboardStats, OrderStatus
+from app.services import supabase_service
+
+logger = logging.getLogger(__name__)
+dashboard_router = APIRouter()
+
+
+# ─────────────────────────────────────────
+# Orders
+# ─────────────────────────────────────────
+
+@dashboard_router.get("/orders")
+async def list_orders(merchant_id: str = None, limit: int = 100):
+    mid = merchant_id or get_settings().default_merchant_id
+    orders = await supabase_service.get_orders_with_details(mid, limit)
+    return {"orders": orders}
+
+
+@dashboard_router.get("/orders/{order_id}/items")
+async def get_order_items(order_id: str):
+    items = await supabase_service.get_order_items(order_id)
+    return {"items": items}
+
+
+class OverrideRequest(BaseModel):
+    status: OrderStatus
+    notes: str = ""
+
+
+@dashboard_router.patch("/orders/{order_id}/override")
+async def override_order(order_id: str, body: OverrideRequest):
+    """Manual override by wholesaler staff for escalated orders."""
+    await supabase_service.update_order_status(
+        order_id, body.status, order_notes=body.notes, requires_human_review=False
+    )
+    return {"success": True, "order_id": order_id, "new_status": body.status}
+
+
+# ─────────────────────────────────────────
+# Inventory
+# ─────────────────────────────────────────
+
+@dashboard_router.get("/inventory")
+async def get_inventory(merchant_id: str = None):
+    mid = merchant_id or get_settings().default_merchant_id
+    inventory = await supabase_service.get_inventory(mid)
+    return {"inventory": inventory}
+
+
+# ─────────────────────────────────────────
+# Stats
+# ─────────────────────────────────────────
+
+@dashboard_router.get("/stats", response_model=DashboardStats)
+async def get_stats(merchant_id: str = None):
+    mid = merchant_id or get_settings().default_merchant_id
+    orders = await supabase_service.get_orders_with_details(mid, limit=500)
+
+    from datetime import date
+    today = date.today().isoformat()
+
+    total_today = sum(1 for o in orders if (o.get("created_at") or "").startswith(today))
+    counts = {s.value: 0 for s in OrderStatus}
+    review_count = 0
+
+    for o in orders:
+        st = o.get("order_status", "")
+        if st in counts:
+            counts[st] += 1
+        if o.get("requires_human_review"):
+            review_count += 1
+
+    return DashboardStats(
+        total_today=total_today,
+        pending=counts[OrderStatus.PENDING.value],
+        awaiting_confirmation=counts[OrderStatus.AWAITING_CONFIRMATION.value],
+        confirmed=counts[OrderStatus.CONFIRMED.value],
+        dispatched=counts[OrderStatus.DISPATCHED.value],
+        failed=counts[OrderStatus.FAILED.value],
+        requires_review=review_count,
+    )
