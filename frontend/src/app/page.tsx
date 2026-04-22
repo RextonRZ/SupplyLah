@@ -9,7 +9,7 @@ function SupplyLahLogo({ white = false }: { white?: boolean }) {
     <img
       src={white ? "/logo-light.png" : "/logo.png"}
       alt="SupplyLah"
-      className="h-10 md:h-12 w-auto scale-[2] md:scale-[2.5] origin-left object-contain"
+      className="h-12 md:h-16 w-auto scale-[2] md:scale-[2.5] origin-left object-contain"
     />
   );
 }
@@ -19,7 +19,7 @@ function Navbar() {
   const [open, setOpen] = useState(false);
   return (
     <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-teal-100">
-      <div className="max-w-6xl mx-auto px-6 py-4 md:py-5 flex items-center justify-between">
+      <div className="max-w-6xl mx-auto px-6 py-1 md:py-2 flex items-center justify-between">
         <Link href="/"><SupplyLahLogo /></Link>
 
         {/* Desktop links */}
@@ -119,33 +119,28 @@ function MockWhatsAppChat() {
 /* ── Hero ─────────────────────────────────────────── */
 function Hero() {
   return (
-    <section className="hero-gradient pt-20 pb-24 px-6 overflow-hidden">
-      <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
+    <section className="hero-gradient pt-22 pb-24 px-6 overflow-hidden">
+      <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-16 items-center">
         {/* Text */}
-        <div className="animate-fade-in">
-          <span className="section-tag mb-6">🤖 AI-Powered Wholesale</span>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-teal-900 leading-tight mb-6">
-            Turn WhatsApp Chaos Into{" "}
+        <div className="animate-fade-in space-y-4">
+          <span className="section-tag mb-2">AI-Powered Wholesale</span>
+          <h1 className="text-4xl sm:text-5xl lg:text-5xl font-black text-teal-900 leading-snug mb-6">
+            Turn WhatsApp <br />
+            Chaos Into <br />
             <span className="text-teal-500">Automated Orders</span>
           </h1>
           <p className="text-lg text-slate-600 mb-8 leading-relaxed max-w-lg">
-            SupplyLah reads messy WhatsApp messages in <strong>Bahasa Melayu, English, and Bahasa Rojak</strong> —
-            then automatically checks stock, calculates pricing, and books Lalamove delivery.
-            All under 90 seconds.
+              Built for real wholesale workflows, SupplyLah converts <strong>messy multilingual WhatsApp orders</strong> into
+              <strong> ready-to-fulfill, structured orders</strong>, and automates <strong>stock verification, pricing, and delivery</strong>,
+              reducing manual work to near zero.
           </p>
           <div className="flex flex-wrap gap-4 mb-10">
             <Link href="/signup" className="btn-primary text-base">
-              Get Started Free →
+              Get Started Free
             </Link>
             <Link href="/dashboard" className="btn-outline text-base">
               View Live Demo
             </Link>
-          </div>
-          {/* Trust points */}
-          <div className="flex flex-wrap gap-6 text-sm text-slate-500">
-            {["✓ No credit card required", "✓ Bahasa Rojak ready", "✓ Free forever for 1 user"].map(t => (
-              <span key={t} className="font-medium">{t}</span>
-            ))}
           </div>
         </div>
 
