@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from app.agents.orchestrator import handle_incoming_message
+from app.agents.orchestrator import handle_incoming_message, _msg_collector
 from app.config import get_settings
 from app.models.schemas import IncomingMessage, MessageType
 from app.services.twilio_service import send_whatsapp_message
@@ -94,15 +94,21 @@ async def mock_chat(payload: IncomingMessage):
     """Simulate a WhatsApp message for the demo UI without real Twilio credentials."""
     settings = get_settings()
 
+    collector: list[str] = []
+    token = _msg_collector.set(collector)
     try:
-        reply = await handle_incoming_message(
+        await handle_incoming_message(
             from_number=payload.from_number,
             message_type=payload.message_type,
             text_content=payload.text_content,
             media_url=payload.media_url,
             merchant_id=payload.merchant_id or settings.default_merchant_id,
         )
-        return {"reply": reply, "from_number": payload.from_number}
     except Exception as exc:
         logger.error("Mock chat error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        _msg_collector.reset(token)
+
+    # Return all messages (ack, progress, final) so the UI can show them progressively
+    return {"replies": collector, "from_number": payload.from_number}

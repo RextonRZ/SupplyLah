@@ -5,20 +5,15 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"protected_namespaces": ("settings_",), "env_file": ".env", "env_file_encoding": "utf-8"}
 
-    # Z.ai GLM
-    zai_api_key: str = "mock-key"
-    zai_base_url: str = "https://open.bigmodel.cn/api/paas/v4/"
+    # Ilmu.ai GLM
+    ilmu_api_key: str = ""
+    ilmu_base_url: str = "https://api.ilmu.ai/anthropic"
 
-    # --- #to be removed starting here ---
-    gemini_api_key: str = ""
-    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    # --- #to be removed ending here ---
-
-    # Model IDs — defaults match ZhipuAI public names; override for hackathon-specific IDs
-    model_reasoning: str = "glm-4-plus"
-    model_fast: str = "glm-4-flash"
-    model_vision: str = "glm-4v"
-    model_asr: str = "glm-4-voice"
+    # Model IDs — ilmu-glm-5.1 for all tasks
+    model_reasoning: str = "ilmu-glm-5.1"
+    model_fast: str = "ilmu-glm-5.1"
+    model_vision: str = "ilmu-glm-5.1"
+    model_asr: str = "ilmu-glm-5.1"
 
     # Supabase
     supabase_url: str = "http://localhost:54321"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -12,6 +13,9 @@ from app.services import supabase_service
 
 logger = logging.getLogger(__name__)
 dashboard_router = APIRouter()
+
+_stats_cache: dict[str, dict] = {}
+_STATS_TTL = 60.0
 
 
 # ─────────────────────────────────────────
@@ -68,11 +72,15 @@ async def get_inventory(merchant_id: str = None):
 @dashboard_router.get("/stats", response_model=DashboardStats)
 async def get_stats(merchant_id: str = None):
     mid = merchant_id or get_settings().default_merchant_id
+
+    cached = _stats_cache.get(mid)
+    if cached and time.monotonic() - cached["ts"] < _STATS_TTL:
+        return cached["data"]
+
     try:
         orders = await supabase_service.get_orders_with_details(mid, limit=500)
     except Exception as e:
-        import logging
-        logging.error("Transient error fetching stats: %s", e)
+        logger.error("Transient error fetching stats: %s", e)
         orders = []
 
     from datetime import date
@@ -89,7 +97,7 @@ async def get_stats(merchant_id: str = None):
         if o.get("requires_human_review"):
             review_count += 1
 
-    return DashboardStats(
+    result = DashboardStats(
         total_today=total_today,
         pending=counts[OrderStatus.PENDING.value],
         awaiting_confirmation=counts[OrderStatus.AWAITING_CONFIRMATION.value],
@@ -98,3 +106,5 @@ async def get_stats(merchant_id: str = None):
         failed=counts[OrderStatus.FAILED.value],
         requires_review=review_count,
     )
+    _stats_cache[mid] = {"ts": time.monotonic(), "data": result}
+    return result

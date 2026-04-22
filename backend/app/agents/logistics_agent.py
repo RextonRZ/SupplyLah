@@ -1,8 +1,9 @@
-"""Logistics Agent — GLM-4.7-Flash for delivery booking and confirmation messages."""
+"""Logistics Agent — GLM for delivery booking and confirmation messages."""
 from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from app.config import get_settings
@@ -86,10 +87,20 @@ async def run_logistics_agent(
         )
 
         raw_output = raw_output.strip()
+
+        # Strip markdown code fences if present
         if raw_output.startswith("```"):
             raw_output = raw_output.split("```")[1]
             if raw_output.startswith("json"):
                 raw_output = raw_output[4:]
+            raw_output = raw_output.strip()
+
+        # If model returned conversational text, try to extract the JSON object from it
+        if not raw_output.startswith("{"):
+            match = re.search(r"\{[\s\S]*\}", raw_output)
+            if match:
+                raw_output = match.group(0)
+                logger.warning("Extracted JSON from conversational logistics response")
 
         data = json.loads(raw_output)
 

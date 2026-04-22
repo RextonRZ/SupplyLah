@@ -111,5 +111,8 @@ async def run_intake_agent(
             items=[],
             confidence=0.0,
             clarification_needed=True,
-            clarification_message="System error — please try again shortly.",
+            clarification_message=(
+                "Maaf, sistem AI kami tengah sibuk sekarang 🙏 Cuba hantar semula pesanan anda dalam seminit ya! "
+                "/ Sorry, our AI is busy right now — please resend your order in a minute! 🙏"
+            ),
         )

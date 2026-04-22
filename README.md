@@ -31,14 +31,14 @@ WhatsApp / Mock Chat UI
   Next.js Dashboard (Kanban + Alerts + Inventory)
 ```
 
-### AI Models (Z.ai GLM)
+### AI Models (Ilmu.ai GLM)
 
 | Model | Role |
 |---|---|
-| `GLM-5.1` | Core reasoning — order parsing, inventory logic, substitutions |
-| `GLM-4.7-Flash` | Fast tasks — logistics booking, confirmation messages |
-| `GLM-ASR-2512` | Speech-to-text — voice notes and call transcription |
-| `GLM-4.6V` | Vision — handwritten order image OCR |
+| `ilmu-glm-5.1` | Core reasoning — order parsing, inventory logic, substitutions |
+| `ilmu-glm-5.1` | Fast tasks — logistics booking, confirmation messages |
+| `ilmu-glm-5.1` | Speech-to-text — voice notes and call transcription |
+| `ilmu-glm-5.1` | Vision — handwritten order image OCR |
 
 ---
 
@@ -121,7 +121,8 @@ docker compose up --build
 
 | Variable | Description |
 |---|---|
-| `ZAI_API_KEY` | Z.ai API key |
+| `ILMU_API_KEY` | Ilmu.ai API key |
+| `ILMU_BASE_URL` | Ilmu.ai API base URL |
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
 | `USE_MOCK_WHATSAPP` | `true` to log instead of send (default: true) |

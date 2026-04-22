@@ -1,45 +1,34 @@
-"""Z.ai GLM API client — OpenAI-compatible interface with tool-calling support."""
+"""Ilmu.ai GLM API client — Anthropic-compatible interface with tool-calling support."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-import httpx
-from openai import AsyncOpenAI
+import anthropic
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-def _build_client() -> AsyncOpenAI:
+def _build_client() -> anthropic.AsyncAnthropic:
     settings = get_settings()
-    
-    # --- #to be removed starting here ---
-    # Temporarily intercept and use Gemini if configured
-    if settings.gemini_api_key:
-        return AsyncOpenAI(
-            api_key=settings.gemini_api_key,
-            base_url=settings.gemini_base_url,
-            http_client=httpx.AsyncClient(timeout=60.0),
-        )
-    # --- #to be removed ending here ---
-    
-    return AsyncOpenAI(
-        api_key=settings.zai_api_key,
-        base_url=settings.zai_base_url,
-        http_client=httpx.AsyncClient(timeout=60.0),
+    return anthropic.AsyncAnthropic(
+        api_key=settings.ilmu_api_key,
+        base_url=settings.ilmu_base_url,
+        timeout=60.0,
     )
 
 
 # Module-level singleton
-_client: AsyncOpenAI | None = None
+_client: anthropic.AsyncAnthropic | None = None
 
 
-def get_glm_client() -> AsyncOpenAI:
+def get_glm_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
         _client = _build_client()
@@ -49,6 +38,108 @@ def get_glm_client() -> AsyncOpenAI:
 # ─────────────────────────────────────────
 # Core agentic tool-calling loop
 # ─────────────────────────────────────────
+
+def _convert_openai_tools_to_anthropic(tools: list[dict]) -> list[dict]:
+    """Convert OpenAI-format tool definitions to Anthropic format."""
+    anthropic_tools = []
+    for tool in tools:
+        func = tool.get("function", tool)
+        anthropic_tools.append({
+            "name": func["name"],
+            "description": func.get("description", ""),
+            "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+        })
+    return anthropic_tools
+
+
+def _convert_messages_for_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Split messages into system prompt + Anthropic-format messages.
+
+    Anthropic requires system as a separate parameter, and messages must
+    alternate user/assistant with no consecutive same-role turns.
+    Tool-result messages use role=user with tool_result content blocks.
+    """
+    system = ""
+    converted: list[dict] = []
+
+    for msg in messages:
+        role = msg.get("role")
+
+        if role == "system":
+            system = msg.get("content", "")
+            continue
+
+        if role == "tool":
+            # Anthropic expects tool results as user messages with tool_result blocks
+            content = msg.get("content", "")
+            tool_call_id = msg.get("tool_call_id", "")
+            # Find tool name from preceding assistant message (not used in output
+            # but kept for debugging clarity)
+            converted.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": content,
+                }],
+            })
+            continue
+
+        if role == "assistant":
+            content = msg.get("content")
+            tool_calls = msg.get("tool_calls")
+
+            if tool_calls:
+                blocks = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tc in tool_calls:
+                    func = tc.get("function", {})
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        args = {}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": func.get("name", ""),
+                        "input": args,
+                    })
+                converted.append({"role": "assistant", "content": blocks})
+            else:
+                if isinstance(content, list):
+                    converted.append({"role": "assistant", "content": content})
+                else:
+                    converted.append({"role": "assistant", "content": content or ""})
+            continue
+
+        # user role
+        content = msg.get("content")
+        if isinstance(content, list):
+            converted.append({"role": "user", "content": content})
+        else:
+            converted.append({"role": "user", "content": content or ""})
+
+    # Ensure messages alternate user/assistant — merge consecutive same-role
+    merged: list[dict] = []
+    for msg in converted:
+        if merged and merged[-1]["role"] == msg["role"]:
+            # Merge content
+            prev_content = merged[-1]["content"]
+            curr_content = msg["content"]
+            if isinstance(prev_content, list) and isinstance(curr_content, list):
+                prev_content.extend(curr_content)
+            elif isinstance(prev_content, list):
+                prev_content.append({"type": "text", "text": curr_content})
+            elif isinstance(curr_content, list):
+                merged[-1]["content"] = [{"type": "text", "text": prev_content}] + curr_content
+            else:
+                merged[-1]["content"] = prev_content + "\n" + curr_content
+        else:
+            merged.append(msg)
+
+    return system, merged
+
 
 async def run_agent_loop(
     model: str,
@@ -63,46 +154,74 @@ async def run_agent_loop(
     Returns the model's final text content when it stops requesting tools.
     """
     client = get_glm_client()
+    anthropic_tools = _convert_openai_tools_to_anthropic(tools) if tools else []
 
     for iteration in range(max_iterations):
+        system, anthropic_msgs = _convert_messages_for_anthropic(messages)
+
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": anthropic_msgs,
+            "max_tokens": 4096,
         }
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+        if system:
+            kwargs["system"] = system
+        if anthropic_tools:
+            kwargs["tools"] = anthropic_tools
 
-        response = await client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        msg = choice.message
+        # Retry up to 2 extra times on transient 502/503 server errors
+        for attempt in range(3):
+            try:
+                response = await client.messages.create(**kwargs)
+                break
+            except anthropic.InternalServerError as exc:
+                if attempt < 2:
+                    logger.warning("ilmu.ai transient error (attempt %d/3): %s — retrying", attempt + 1, exc)
+                    await asyncio.sleep(2 ** attempt)  # 1s, 2s
+                else:
+                    raise
 
-        # Append assistant turn to history
-        messages.append(msg.model_dump(exclude_none=True))
+        # Convert Anthropic response back to OpenAI-like format for the message history
+        text_parts = []
+        tool_use_blocks = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_use_blocks.append(block)
 
-        if not msg.tool_calls:
-            # No more tool calls — return final answer
-            return msg.content or ""
+        # Build assistant message in OpenAI format for history tracking
+        assistant_msg: dict = {"role": "assistant", "content": "\n".join(text_parts) if text_parts else None}
+        if tool_use_blocks:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tb.id,
+                    "type": "function",
+                    "function": {
+                        "name": tb.name,
+                        "arguments": json.dumps(tb.input, ensure_ascii=False),
+                    },
+                }
+                for tb in tool_use_blocks
+            ]
+        messages.append(assistant_msg)
+
+        if not tool_use_blocks:
+            return "\n".join(text_parts) or ""
 
         # Execute each requested tool call
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
-                args = {}
-
-            if name in tool_executors:
+        for tb in tool_use_blocks:
+            if tb.name in tool_executors:
                 try:
-                    result = await tool_executors[name](**args)
+                    result = await tool_executors[tb.name](**tb.input)
                 except Exception as exc:
                     result = {"error": str(exc)}
             else:
-                result = {"error": f"Unknown tool: {name}"}
+                result = {"error": f"Unknown tool: {tb.name}"}
 
             messages.append({
                 "role": "tool",
-                "tool_call_id": tc.id,
+                "tool_call_id": tb.id,
                 "content": json.dumps(result, ensure_ascii=False),
             })
 
@@ -116,23 +235,35 @@ async def run_agent_loop(
 # ─────────────────────────────────────────
 
 async def describe_image(image_path_or_url: str, prompt: str) -> str:
-    """Send an image to GLM-4V and return its text response."""
+    """Send an image to the vision model and return its text response."""
     settings = get_settings()
     client = get_glm_client()
 
     if image_path_or_url.startswith("http"):
-        image_content: dict = {"type": "image_url", "image_url": {"url": image_path_or_url}}
+        image_content: dict = {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": image_path_or_url,
+            },
+        }
     else:
         data = Path(image_path_or_url).read_bytes()
         b64 = base64.b64encode(data).decode()
         ext = Path(image_path_or_url).suffix.lstrip(".") or "jpeg"
+        media_type = f"image/{ext}" if ext in ("png", "jpg", "jpeg", "gif", "webp") else "image/jpeg"
         image_content = {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/{ext};base64,{b64}"},
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
         }
 
-    response = await client.chat.completions.create(
+    response = await client.messages.create(
         model=settings.model_vision,
+        max_tokens=4096,
         messages=[
             {
                 "role": "user",
@@ -140,46 +271,47 @@ async def describe_image(image_path_or_url: str, prompt: str) -> str:
             }
         ],
     )
-    return response.choices[0].message.content or ""
+    return next((b.text for b in response.content if b.type == "text"), "")
 
 
 # ─────────────────────────────────────────
 # ASR helper
 # ─────────────────────────────────────────
 
-async def transcribe_audio(audio_bytes: bytes, language_hint: str = "zh,en,ms") -> str:
-    """Transcribe audio via ZhipuAI's ASR model.
+async def transcribe_audio(audio_bytes: bytes, _language_hint: str = "zh,en,ms") -> str:
+    """Transcribe audio via the model's multimodal capabilities.
 
-    Falls back to a multimodal text message approach if the dedicated audio
-    endpoint is unavailable in the current API tier.
+    Falls back to a multimodal text message approach if a dedicated audio
+    endpoint is unavailable.
     """
     settings = get_settings()
-
-    # Try ZhipuAI SDK first (has native audio support)
-    try:
-        from zhipuai import ZhipuAI  # type: ignore
-
-        zai = ZhipuAI(api_key=settings.zai_api_key)
-        response = zai.audio.transcriptions.create(
-            model=settings.model_asr,
-            file=("audio.mp3", audio_bytes, "audio/mpeg"),
-        )
-        return response.text
-    except Exception as exc:
-        logger.warning("ZhipuAI ASR SDK failed (%s), falling back to multimodal", exc)
-
-    # Fallback: send as base64 audio in chat completions
-    b64 = base64.b64encode(audio_bytes).decode()
     client = get_glm_client()
-    response = await client.chat.completions.create(
+
+    b64 = base64.b64encode(audio_bytes).decode()
+    response = await client.messages.create(
         model=settings.model_vision,
+        max_tokens=4096,
         messages=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": f"Please transcribe the following audio. Languages may include Malaysian English, Bahasa Melayu, or mixed. Output transcription only.\nBase64 audio: {b64[:100]}..."},
+                    {
+                        "type": "text",
+                        "text": (
+                            "Please transcribe the following audio. Languages may include "
+                            "Malaysian English, Bahasa Melayu, or mixed. Output transcription only."
+                        ),
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "audio/mpeg",
+                            "data": b64,
+                        },
+                    },
                 ],
             }
         ],
     )
-    return response.choices[0].message.content or ""
+    return next((b.text for b in response.content if b.type == "text"), "")

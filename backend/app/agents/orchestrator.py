@@ -2,13 +2,14 @@
 
 Flow:
   Incoming message → lookup customer → check pending order state →
-    NEW: Intake → Inventory → save quote → set Awaiting Confirmation
+    NEW: immediate ack → Intake → "checking stock" → Inventory → save quote → Awaiting Confirmation
     AWAITING CONFIRMATION: detect YES/NO → Logistics | Expire
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from typing import Optional
 
 from app.agents.intake_agent import run_intake_agent
@@ -18,9 +19,9 @@ from app.config import get_settings
 from app.models.schemas import (
     CustomerRow,
     InventoryResult,
+    MessageType,
     OrderRow,
     OrderStatus,
-    MessageType,
 )
 from app.services import supabase_service, twilio_service
 from app.services.glm_client import describe_image, transcribe_audio
@@ -28,6 +29,10 @@ from app.services.s3_service import upload_media
 from app.services.twilio_service import download_twilio_media
 
 logger = logging.getLogger(__name__)
+
+# Collects every agent message sent during a request — used by mock-chat to return all
+# replies as an array so the demo UI can show them progressively.
+_msg_collector: ContextVar[list[str] | None] = ContextVar("_msg_collector", default=None)
 
 # ─────────────────────────────────────────
 # Serialised inventory write queue (prevents overselling)
@@ -37,7 +42,6 @@ _inventory_queue: asyncio.Queue = asyncio.Queue()
 
 
 async def _inventory_worker() -> None:
-    """Background worker — processes inventory deductions one at a time."""
     while True:
         coro = await _inventory_queue.get()
         try:
@@ -48,7 +52,6 @@ async def _inventory_worker() -> None:
             _inventory_queue.task_done()
 
 
-# Start worker on first import (FastAPI lifespan handles this properly in main.py)
 _worker_task: Optional[asyncio.Task] = None
 
 
@@ -63,6 +66,55 @@ def ensure_inventory_worker() -> None:
 
 
 # ─────────────────────────────────────────
+# Progressive messaging helpers
+# ─────────────────────────────────────────
+
+_MS_PARTICLES = {
+    "nak", "minta", "boleh", "hantar", "bagi", "saya", "kami", "boss", "lah",
+    "la", "ya", "tolong", "barang", "kg", "botol", "beg", "kotak", "unit",
+    "order", "pesanan", "stok", "harga",
+}
+
+
+def _detect_language(text: str) -> str:
+    words = set(text.lower().split())
+    return "ms" if words & _MS_PARTICLES else "en"
+
+
+def _ack_received(msg_type: MessageType, lang: str) -> str:
+    if msg_type == MessageType.AUDIO:
+        return "Ok! 🎙️ Saya tengah dengar voice note tu, jap ya..." if lang == "ms" else "Got your voice note! Transcribing now... 🎙️"
+    if msg_type == MessageType.IMAGE:
+        return "Ok! 🖼️ Tengah baca gambar pesanan tu, jap sekejap..." if lang == "ms" else "Got your image! Reading the order list... 🖼️"
+    return "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..." if lang == "ms" else "On it! 🔍 Processing your order, give me a sec..."
+
+
+def _ack_checking_stock(lang: str, items_preview: str) -> str:
+    if lang == "ms":
+        return f"Ok faham! *{items_preview}* — tengah semak stok sekarang 📦"
+    return f"Got it! Checking stock for *{items_preview}* now... 📦"
+
+
+async def _send_intermediate(
+    customer: CustomerRow,
+    message: str,
+    order_id: str | None = None,
+) -> None:
+    """Send an intermediate status message: WhatsApp + Supabase log + collect for mock-chat."""
+    await twilio_service.send_whatsapp_message(customer.whatsapp_number, message)
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=order_id,
+        sender_type="agent",
+        message_type="text",
+        content=message,
+    )
+    collector = _msg_collector.get()
+    if collector is not None:
+        collector.append(message)
+
+
+# ─────────────────────────────────────────
 # Confirmation keyword detection
 # ─────────────────────────────────────────
 
@@ -71,7 +123,6 @@ _NEGATIVE = {"no", "nope", "cancel", "batal", "tidak", "tak", "x", "no la", "can
 
 
 def _is_confirmation(text: str) -> Optional[bool]:
-    """Returns True for yes, False for no, None if ambiguous."""
     clean = text.strip().lower().rstrip("!.,")
     if clean in _AFFIRMATIVE or any(clean.startswith(k) for k in _AFFIRMATIVE):
         return True
@@ -89,7 +140,6 @@ async def _resolve_to_text(
     text_content: Optional[str],
     media_url: Optional[str],
 ) -> str:
-    """Convert any input modality to plain text for agent processing."""
     if message_type == MessageType.TEXT:
         return text_content or ""
 
@@ -99,7 +149,7 @@ async def _resolve_to_text(
     media_bytes = await download_twilio_media(media_url)
 
     if message_type == MessageType.AUDIO:
-        s3_url = await upload_media(media_bytes, "audio/ogg", f"audio/{hash(media_url)}.ogg")
+        await upload_media(media_bytes, "audio/ogg", f"audio/{hash(media_url)}.ogg")
         transcript = await transcribe_audio(media_bytes)
         logger.info("Audio transcribed: %s...", transcript[:100])
         return transcript
@@ -131,7 +181,6 @@ async def _handle_new_order(
     customer: CustomerRow,
     merchant_id: str,
 ) -> str:
-    """Run Intake → Inventory pipeline for a new order."""
     settings = get_settings()
 
     # Step 1: Intake Agent
@@ -141,13 +190,24 @@ async def _handle_new_order(
         intake.intent, len(intake.items), intake.confidence,
     )
 
-    # Non-order intents
+    # Non-order intents (or API errors that returned intent="other")
     if intake.intent != "order":
-        return (
-            "Hi! I can help you place wholesale orders. "
-            "Just send me a message or voice note with what you need and how much. / "
-            "Saya boleh bantu terima pesanan borong. Sila hantar mesej atau nota suara dengan butiran pesanan anda."
+        if intake.clarification_needed and intake.clarification_message:
+            # Covers API errors / service-down cases — use the message the agent set
+            msg = intake.clarification_message
+        else:
+            msg = (
+                "Hi! I can help you place wholesale orders. "
+                "Just send me a message or voice note with what you need and how much. / "
+                "Saya boleh bantu terima pesanan borong. Sila hantar mesej atau nota suara dengan butiran pesanan anda."
+            )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
         )
+        return msg
 
     # Low confidence → ask for clarification
     if intake.clarification_needed or intake.confidence < settings.low_confidence_threshold:
@@ -162,6 +222,15 @@ async def _handle_new_order(
             content=msg,
         )
         return msg
+
+    # Step 1.5: Notify customer we're checking stock
+    lang = intake.language_detected or "ms"
+    items_preview = ", ".join(
+        f"{i.quantity}x {i.product_name}" for i in intake.items[:3]
+    )
+    if len(intake.items) > 3:
+        items_preview += f" +{len(intake.items) - 3} more"
+    await _send_intermediate(customer, _ack_checking_stock(lang, items_preview))
 
     # Step 2: Inventory Agent
     inventory = await run_inventory_agent(intake, merchant_id, intake.language_detected)
@@ -190,7 +259,6 @@ async def _handle_new_order(
         status=OrderStatus.AWAITING_CONFIRMATION,
     )
 
-    # Persist order items
     await supabase_service.create_order_items(
         order.order_id,
         [
@@ -205,7 +273,6 @@ async def _handle_new_order(
         ],
     )
 
-    # Store inventory result in order notes for retrieval at confirmation
     import json
     await supabase_service.update_order_status(
         order.order_id,
@@ -235,11 +302,9 @@ async def _handle_confirmation_reply(
     pending_order: OrderRow,
     customer: CustomerRow,
 ) -> str:
-    """Process a buyer's reply to a pending quote."""
     decision = _is_confirmation(text)
 
     if decision is None:
-        # Ambiguous reply — ask again
         return (
             "Sorry, I didn't quite catch that. Reply *YES* to confirm your order or *NO* to cancel. "
             "/ Maaf, saya tidak faham. Balas *YA* untuk sahkan atau *TIDAK* untuk batal."
@@ -265,17 +330,14 @@ async def _handle_confirmation_reply(
     try:
         notes_data = _json.loads(raw_notes)
         inventory_data = notes_data.get("inventory_result", {})
-        intake_data = notes_data.get("intake_result", {})
         delivery_address = notes_data.get("delivery_address", "") or customer.delivery_address or ""
         language = notes_data.get("language", "mixed")
     except Exception:
         inventory_data = {}
-        intake_data = {}
         delivery_address = customer.delivery_address or ""
         language = "mixed"
 
-    # Reconstruct InventoryResult from stored JSON
-    from app.models.schemas import InventoryResult, ResolvedOrderItem
+    from app.models.schemas import InventoryResult
     try:
         inv_result = InventoryResult(**inventory_data)
     except Exception:
@@ -287,7 +349,6 @@ async def _handle_confirmation_reply(
 
     await supabase_service.update_order_status(pending_order.order_id, OrderStatus.CONFIRMED)
 
-    # Enqueue logistics via the serial inventory worker
     async def _do_logistics():
         logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
         await supabase_service.log_message(
@@ -302,12 +363,11 @@ async def _handle_confirmation_reply(
     _inventory_queue.put_nowait(_do_logistics())
     ensure_inventory_worker()
 
-    # Immediate acknowledgement while logistics processes in background
     ack = (
-        "✅ Got it! Confirming your order and arranging delivery... "
-        "You'll receive a confirmation with tracking shortly!\n"
-        "/ ✅ Pesanan disahkan! Sedang atur penghantaran... "
-        "Anda akan terima butiran pengesahan dan tracking tidak lama lagi!"
+        "✅ Dapat! Tengah sahkan pesanan dan atur penghantaran... "
+        "Kejap lagi dapat konfirmasi dengan tracking! 🚚\n"
+        "/ ✅ Got it! Confirming your order and arranging delivery... "
+        "You'll get tracking info shortly!"
     )
     await supabase_service.log_message(
         customer_id=customer.customer_id,
@@ -330,10 +390,6 @@ async def handle_incoming_message(
     media_url: Optional[str],
     merchant_id: str,
 ) -> str:
-    """Main entry point called by the Twilio webhook handler.
-
-    Returns the message string to send back to the buyer.
-    """
     ensure_inventory_worker()
 
     # 1. Get or create customer
@@ -353,16 +409,27 @@ async def handle_incoming_message(
 
     if pending_order:
         raw_text = await _resolve_to_text(message_type, text_content, media_url)
-        return await _handle_confirmation_reply(raw_text, pending_order, customer)
+        final = await _handle_confirmation_reply(raw_text, pending_order, customer)
+    else:
+        # Send immediate ack so the customer knows we received their message
+        lang = _detect_language(text_content or "")
+        await _send_intermediate(customer, _ack_received(message_type, lang))
 
-    # 4. Pre-process media to text
-    raw_text = await _resolve_to_text(message_type, text_content, media_url)
+        # 4. Pre-process media to text
+        raw_text = await _resolve_to_text(message_type, text_content, media_url)
 
-    if not raw_text.strip():
-        return (
-            "Hi! 👋 I'm SupplyLah — send me your order as a text message, voice note, or photo of your order list. "
-            "/ Halo! Saya SupplyLah — hantar pesanan anda sebagai mesej, nota suara, atau gambar senarai pesanan."
-        )
+        if not raw_text.strip():
+            final = (
+                "Hi! 👋 I'm SupplyLah — send me your order as a text message, voice note, or photo of your order list. "
+                "/ Halo! Saya SupplyLah — hantar pesanan anda sebagai mesej, nota suara, atau gambar senarai pesanan."
+            )
+        else:
+            # 5. Process as new order
+            final = await _handle_new_order(raw_text, message_type, customer, merchant_id)
 
-    # 5. Process as new order
-    return await _handle_new_order(raw_text, message_type, customer, merchant_id)
+    # Add the final reply to the mock-chat collector (if active)
+    collector = _msg_collector.get()
+    if collector is not None and final not in collector:
+        collector.append(final)
+
+    return final

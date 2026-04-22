@@ -52,7 +52,13 @@ export default function MockChat() {
         }),
       });
       const data = await res.json();
-      setMessages((prev) => [...prev, { role: "system", text: data.reply, time: now() }]);
+      const replies: string[] = data.replies ?? (data.reply ? [data.reply] : []);
+
+      for (let i = 0; i < replies.length; i++) {
+        // Brief typing pause between messages so they feel sequential
+        if (i > 0) await new Promise((r) => setTimeout(r, 700));
+        setMessages((prev) => [...prev, { role: "system", text: replies[i], time: now() }]);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,

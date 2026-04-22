@@ -4,6 +4,7 @@ python-dotenv==1.0.1
 pydantic==2.10.3
 pydantic-settings==2.6.1
 openai==1.57.4
+anthropic>=0.42.0
 zhipuai
 supabase==2.10.0
 twilio==9.3.7
