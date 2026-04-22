@@ -45,26 +45,44 @@ async def twilio_webhook(
     else:
         msg_type = MessageType.TEXT
 
-    try:
-        reply = await handle_incoming_message(
-            from_number=from_number,
-            message_type=msg_type,
-            text_content=Body or None,
-            media_url=MediaUrl0 or None,
-            merchant_id=settings.default_merchant_id,
-        )
-
-        if not settings.use_mock_whatsapp:
-            # Twilio TwiML response for auto-reply
-            twiml = f"""<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply}</Message></Response>"""
-            return PlainTextResponse(content=twiml, media_type="application/xml")
-        else:
+    if settings.use_mock_whatsapp:
+        # Mock path: process synchronously (no real Twilio timeout to worry about)
+        try:
+            reply = await handle_incoming_message(
+                from_number=from_number,
+                message_type=msg_type,
+                text_content=Body or None,
+                media_url=MediaUrl0 or None,
+                merchant_id=settings.default_merchant_id,
+            )
             await send_whatsapp_message(from_number, reply)
-            return PlainTextResponse(content="OK")
+        except Exception as exc:
+            logger.error("Webhook processing error: %s", exc, exc_info=True)
+        return PlainTextResponse(content="OK")
 
-    except Exception as exc:
-        logger.error("Webhook processing error: %s", exc, exc_info=True)
-        return PlainTextResponse(content="OK")  # Always 200 to Twilio
+    # Real Twilio path: Twilio has a 15-second webhook timeout but AI processing
+    # can take longer. Return empty TwiML immediately, then send reply via outbound API.
+    import asyncio
+
+    async def _process_and_reply():
+        try:
+            reply = await handle_incoming_message(
+                from_number=from_number,
+                message_type=msg_type,
+                text_content=Body or None,
+                media_url=MediaUrl0 or None,
+                merchant_id=settings.default_merchant_id,
+            )
+            await send_whatsapp_message(from_number, reply)
+        except Exception as exc:
+            logger.error("Webhook background error: %s", exc, exc_info=True)
+
+    asyncio.create_task(_process_and_reply())
+    # Return empty TwiML immediately so Twilio doesn't time out
+    return PlainTextResponse(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="application/xml",
+    )
 
 
 # ─────────────────────────────────────────

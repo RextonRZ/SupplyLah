@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     zai_api_key: str = "mock-key"
     zai_base_url: str = "https://open.bigmodel.cn/api/paas/v4/"
 
+    # --- #to be removed starting here ---
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    # --- #to be removed ending here ---
+
     # Model IDs — defaults match ZhipuAI public names; override for hackathon-specific IDs
     model_reasoning: str = "glm-4-plus"
     model_fast: str = "glm-4-flash"

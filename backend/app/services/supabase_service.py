@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import httpx
 from supabase import create_client, Client
 
 from app.config import get_settings
@@ -11,15 +12,19 @@ from app.models.schemas import CustomerRow, OrderRow, OrderStatus, ProductRow
 
 logger = logging.getLogger(__name__)
 
-_client: Client | None = None
-
-
 def get_supabase() -> Client:
-    global _client
-    if _client is None:
-        s = get_settings()
-        _client = create_client(s.supabase_url, s.supabase_service_key)
-    return _client
+    s = get_settings()
+    client = create_client(s.supabase_url, s.supabase_service_key)
+    # Supabase PostgREST sends HTTP/2 GOAWAY after ~2 streams, crashing mid-pipeline.
+    # Replace the PostgREST httpx session with an HTTP/1.1 client to avoid this.
+    old = client.postgrest.session
+    client.postgrest.session = httpx.Client(
+        base_url=str(old.base_url),
+        headers=dict(old.headers),
+        http2=False,
+    )
+    old.close()
+    return client
 
 
 # ─────────────────────────────────────────
@@ -33,11 +38,11 @@ async def get_or_create_customer(whatsapp_number: str, merchant_id: str) -> Cust
         .select("*")
         .eq("whatsapp_number", whatsapp_number)
         .eq("merchant_id", merchant_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if result.data:
-        return CustomerRow(**result.data)
+        return CustomerRow(**result.data[0])
 
     new = (
         db.table("customer")
@@ -143,11 +148,11 @@ async def get_product_by_id(product_id: str) -> Optional[ProductRow]:
         .table("product")
         .select("*")
         .eq("product_id", product_id)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if result.data:
-        return ProductRow(**result.data)
+        return ProductRow(**result.data[0])
     return None
 
 

@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 
 from app.config import get_settings
-from app.mcp.tools import INTAKE_TOOLS, build_intake_executors
 from app.models.schemas import IntakeResult, OrderLineItem
+from app.services import supabase_service
 from app.services.glm_client import run_agent_loop
 
 logger = logging.getLogger(__name__)
@@ -25,18 +25,31 @@ async def run_intake_agent(
 ) -> IntakeResult:
     """Parse an unstructured buyer message into a structured IntakeResult.
 
-    Args:
-        raw_message: The buyer's message (text, or text transcribed from audio/image).
-        merchant_id: The merchant's UUID for catalog lookups.
-
-    Returns:
-        IntakeResult with extracted order items and confidence score.
+    Product catalog is fetched once and injected into the system prompt,
+    reducing Gemini calls from ~3 to 1 per message (no tool-call round trips).
     """
     settings = get_settings()
     system_prompt = _load_system_prompt()
 
+    # Fetch catalog once; inject into context instead of tool-call round trips
+    products = await supabase_service.get_products(merchant_id)
+    catalog = json.dumps(
+        [
+            {
+                "product_name": p.product_name,
+                "product_id": p.product_id,
+                "slang_aliases": p.slang_aliases,
+            }
+            for p in products
+        ],
+        ensure_ascii=False,
+    )
+
     messages = [
-        {"role": "system", "content": system_prompt},
+        {
+            "role": "system",
+            "content": system_prompt + f"\n\nAvailable product catalog:\n{catalog}",
+        },
         {
             "role": "user",
             "content": (
@@ -46,14 +59,12 @@ async def run_intake_agent(
         },
     ]
 
-    executors = build_intake_executors(merchant_id)
-
     try:
         raw_output = await run_agent_loop(
             model=settings.model_reasoning,
             messages=messages,
-            tools=INTAKE_TOOLS,
-            tool_executors=executors,
+            tools=[],
+            tool_executors={},
         )
         # Strip markdown fences if the model adds them
         raw_output = raw_output.strip()

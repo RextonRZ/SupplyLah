@@ -52,7 +52,12 @@ async def override_order(order_id: str, body: OverrideRequest):
 @dashboard_router.get("/inventory")
 async def get_inventory(merchant_id: str = None):
     mid = merchant_id or get_settings().default_merchant_id
-    inventory = await supabase_service.get_inventory(mid)
+    try:
+        inventory = await supabase_service.get_inventory(mid)
+    except Exception as e:
+        import logging
+        logging.error("Transient error fetching inventory: %s", e)
+        inventory = []
     return {"inventory": inventory}
 
 
@@ -63,7 +68,12 @@ async def get_inventory(merchant_id: str = None):
 @dashboard_router.get("/stats", response_model=DashboardStats)
 async def get_stats(merchant_id: str = None):
     mid = merchant_id or get_settings().default_merchant_id
-    orders = await supabase_service.get_orders_with_details(mid, limit=500)
+    try:
+        orders = await supabase_service.get_orders_with_details(mid, limit=500)
+    except Exception as e:
+        import logging
+        logging.error("Transient error fetching stats: %s", e)
+        orders = []
 
     from datetime import date
     today = date.today().isoformat()

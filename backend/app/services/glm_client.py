@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 
 def _build_client() -> AsyncOpenAI:
     settings = get_settings()
+    
+    # --- #to be removed starting here ---
+    # Temporarily intercept and use Gemini if configured
+    if settings.gemini_api_key:
+        return AsyncOpenAI(
+            api_key=settings.gemini_api_key,
+            base_url=settings.gemini_base_url,
+            http_client=httpx.AsyncClient(timeout=60.0),
+        )
+    # --- #to be removed ending here ---
+    
     return AsyncOpenAI(
         api_key=settings.zai_api_key,
         base_url=settings.zai_base_url,
