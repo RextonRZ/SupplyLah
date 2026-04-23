@@ -19,9 +19,75 @@ interface UserProfile {
   initials: string;
 }
 
+/* ── Promo modal (shown to unauthenticated demo users) ── */
+function PromoModal({ feature, onClose }: { feature: string; onClose: () => void }) {
+  const FEATURE_COPY: Record<string, { headline: string; sub: string }> = {
+    settings: {
+      headline: "Your store, your rules",
+      sub: "Set minimum order values, delivery fees, discount rules, and substitution logic — all in one place.",
+    },
+    team: {
+      headline: "Bring your whole team in",
+      sub: "Invite warehouse managers and staff with role-based access. Everyone sees what they need to.",
+    },
+    inventory: {
+      headline: "Your stock, always in sync",
+      sub: "Connect Google Sheets or add products manually. Every order quote checks live stock levels.",
+    },
+  };
+  const copy = FEATURE_COPY[feature] ?? FEATURE_COPY.settings;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      style={{ background: "rgba(15,23,42,0.45)", backdropFilter: "blur(4px)" }}
+      onClick={onClose}>
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8 text-center relative"
+        onClick={(e) => e.stopPropagation()}>
+
+        {/* Close */}
+        <button onClick={onClose}
+          className="absolute top-4 right-4 w-8 h-8 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 flex items-center justify-center transition-colors text-lg">
+          ×
+        </button>
+
+        {/* Mascot */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/mascot-hero.png" alt="" className="w-28 h-28 object-contain mx-auto mb-4 drop-shadow-xl animate-float"
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+
+        {/* Copy */}
+        <h2 className="text-2xl font-black text-teal-900 mb-2 leading-tight">{copy.headline}</h2>
+        <p className="text-slate-500 text-sm leading-relaxed mb-6">{copy.sub}</p>
+
+        {/* Perks */}
+        <div className="bg-teal-50 rounded-2xl px-5 py-4 mb-6 text-left space-y-2">
+          {["Free to start — no credit card needed", "Set up in under 3 minutes", "Your own data, your own workspace"].map(t => (
+            <div key={t} className="flex items-center gap-2 text-sm text-teal-800">
+              <span className="text-teal-500 font-bold">✓</span> {t}
+            </div>
+          ))}
+        </div>
+
+        <Link href="/signup"
+          className="btn-primary block w-full py-3.5 text-sm font-bold text-center">
+          Create your free account →
+        </Link>
+        <button onClick={onClose} className="mt-3 text-xs text-slate-400 hover:text-slate-600 transition-colors">
+          Maybe later
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── Profile dropdown ── */
-function ProfileMenu({ profile, onLogout }: { profile: UserProfile; onLogout: () => void }) {
+function ProfileMenu({ profile, isAuthenticated, onLogout }: {
+  profile: UserProfile;
+  isAuthenticated: boolean;
+  onLogout: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [promo, setPromo] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,69 +98,100 @@ function ProfileMenu({ profile, onLogout }: { profile: UserProfile; onLogout: ()
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-2.5 pl-3 pr-2 py-1.5 rounded-xl hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all duration-200"
-      >
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center text-white text-xs font-black shrink-0">
-          {profile.initials}
-        </div>
-        <div className="text-left hidden sm:block">
-          <p className="text-sm font-semibold text-slate-800 leading-tight">{profile.businessName}</p>
-          <p className="text-xs text-slate-400 leading-tight">{profile.fullName}</p>
-        </div>
-        <svg className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
+  function menuItem(icon: string, label: string, href: string, promoKey: string) {
+    if (isAuthenticated) {
+      return (
+        <Link href={href} onClick={() => setOpen(false)}
+          className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+          <span className="text-base">{icon}</span> {label}
+        </Link>
+      );
+    }
+    return (
+      <button onClick={() => { setOpen(false); setPromo(promoKey); }}
+        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+        <span className="text-base">{icon}</span>
+        <span>{label}</span>
+        <span className="ml-auto text-[10px] bg-teal-100 text-teal-600 font-semibold px-1.5 py-0.5 rounded-full">Pro</span>
       </button>
+    );
+  }
 
-      {open && (
-        <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden">
-          {/* Profile header */}
-          <div className="px-4 py-4 bg-teal-50 border-b border-teal-100">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-teal-600 flex items-center justify-center text-white text-sm font-black shrink-0">
-                {profile.initials}
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-bold text-slate-900 truncate">{profile.businessName}</p>
-                <p className="text-xs text-slate-500 truncate">{profile.email}</p>
+  return (
+    <>
+      {promo && <PromoModal feature={promo} onClose={() => setPromo(null)} />}
+
+      <div className="relative" ref={ref}>
+        <button onClick={() => setOpen(!open)}
+          className="flex items-center gap-2.5 pl-3 pr-2 py-1.5 rounded-xl hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all duration-200">
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 ${isAuthenticated ? "bg-teal-600" : "bg-slate-400"}`}>
+            {isAuthenticated ? profile.initials : "?"}
+          </div>
+          <div className="text-left hidden sm:block">
+            <p className="text-sm font-semibold text-slate-800 leading-tight">
+              {isAuthenticated ? profile.businessName : "Demo Mode"}
+            </p>
+            <p className="text-xs text-slate-400 leading-tight">
+              {isAuthenticated ? profile.fullName : "Not signed in"}
+            </p>
+          </div>
+          <svg className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {open && (
+          <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden">
+            {/* Header */}
+            <div className={`px-4 py-4 border-b ${isAuthenticated ? "bg-teal-50 border-teal-100" : "bg-slate-50 border-slate-100"}`}>
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-black shrink-0 ${isAuthenticated ? "bg-teal-600" : "bg-slate-400"}`}>
+                  {isAuthenticated ? profile.initials : "?"}
+                </div>
+                <div className="min-w-0">
+                  {isAuthenticated ? (
+                    <>
+                      <p className="text-sm font-bold text-slate-900 truncate">{profile.businessName}</p>
+                      <p className="text-xs text-slate-500 truncate">{profile.email}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-bold text-slate-700">Viewing demo</p>
+                      <Link href="/signup" onClick={() => setOpen(false)}
+                        className="text-xs text-teal-600 font-semibold hover:underline underline-offset-2">
+                        Create a free account →
+                      </Link>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Menu items */}
-          <div className="py-1.5">
-            <Link href="/get-started"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-              <span className="text-base">⚙️</span> Store Settings
-            </Link>
-            <Link href="/get-started"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-              <span className="text-base">👥</span> Team Members
-            </Link>
-            <Link href="/get-started"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-              <span className="text-base">📦</span> Manage Inventory
-            </Link>
-          </div>
+            {/* Menu items */}
+            <div className="py-1.5">
+              {menuItem("⚙️", "Store Settings",   "/get-started", "settings")}
+              {menuItem("👥", "Team Members",      "/get-started", "team")}
+              {menuItem("📦", "Manage Inventory",  "/get-started", "inventory")}
+            </div>
 
-          <div className="border-t border-slate-100 py-1.5">
-            <button
-              onClick={() => { setOpen(false); onLogout(); }}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
-              <span className="text-base">🚪</span> Log out
-            </button>
+            {/* Footer */}
+            <div className="border-t border-slate-100 py-1.5">
+              {isAuthenticated ? (
+                <button onClick={() => { setOpen(false); onLogout(); }}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors">
+                  <span className="text-base">🚪</span> Log out
+                </button>
+              ) : (
+                <Link href="/signup" onClick={() => setOpen(false)}
+                  className="flex items-center gap-3 px-4 py-2.5 text-sm text-teal-600 font-semibold hover:bg-teal-50 transition-colors">
+                  <span className="text-base">✨</span> Sign up free
+                </Link>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   );
 }
 
