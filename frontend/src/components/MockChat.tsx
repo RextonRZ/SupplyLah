@@ -12,7 +12,8 @@ interface ChatMessage {
 const DEMO_PHONE = "+60198765432";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
-export default function MockChat() {
+export default function MockChat({ merchantId }: { merchantId?: string }) {
+  const resolvedMerchant = merchantId || DEMO_MERCHANT;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "system",
@@ -48,7 +49,7 @@ export default function MockChat() {
           from_number: DEMO_PHONE,
           message_type: "text",
           text_content: text,
-          merchant_id: DEMO_MERCHANT,
+          merchant_id: resolvedMerchant,
         }),
       });
       const data = await res.json();
