@@ -4,14 +4,23 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import * as XLSX from "xlsx";
+import Papa from "papaparse";
 
-interface Product   { name: string; sku: string; price: string; stock: string; }
+interface Product { 
+  product_id: string; 
+  product_name: string; 
+  unit: string; 
+  available_quantity: string; 
+  reorder_threshold: string; 
+  unit_price: string; 
+}
 interface Customer  { name: string; phone: string; address: string; }
 interface TeamMember { email: string; phone: string; role: "Wholesale Supplier" | "Warehouse Manager"; }
 interface Rules {
   minOrderValue: string;
   allowDiscount: boolean;
-  discountPct: string;
+  substitutions: Record<string, { substitute_id: string; discount: string }>;
   chargeDelivery: boolean;
   deliveryFee: string;
 }
@@ -48,13 +57,13 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
   const [importing, setImporting] = useState(false);
   const [fileName, setFileName]   = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [row, setRow]             = useState<Product>({ name: "", sku: "", price: "", stock: "" });
+  const [row, setRow]             = useState<Product>({ product_id: "", product_name: "", unit: "", available_quantity: "", reorder_threshold: "", unit_price: "" });
   const fileRef                   = useRef<HTMLInputElement>(null);
 
   function addRow() {
-    if (!row.name || !row.price) return;
+    if (!row.product_name || !row.unit_price) return;
     setProducts([...products, row]);
-    setRow({ name: "", sku: "", price: "", stock: "" });
+    setRow({ product_id: "", product_name: "", unit: "", available_quantity: "", reorder_threshold: "", unit_price: "" });
   }
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -70,29 +79,116 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
 
     setFileName(file.name);
 
+    // AI-driven robust parsing strategy
+    const processData = (data: Record<string, any>[]) => {
+      const parsed: Product[] = [];
+      for (const row of data) {
+        // Fallback: Support exact headers or index-based fallback 
+        const rowVals = Object.values(row);
+        
+        // Priority 1: Read by exact column header if it exists
+        const id = row["product_id"] ?? rowVals[0];
+        const name = row["product_name"] ?? rowVals[1];
+        
+        if (!name) continue; // Must at least have a product name
+
+        parsed.push({ 
+          product_id: String(id || "").trim(), 
+          product_name: String(name || "").trim(), 
+          unit: String(row["unit"] ?? rowVals[2] ?? "").trim(), 
+          available_quantity: String(row["available_quantity"] ?? rowVals[3] ?? "").trim(),
+          reorder_threshold: String(row["reorder_threshold"] ?? rowVals[4] ?? "").trim(),
+          unit_price: String(row["unit_price"] ?? rowVals[5] ?? "").trim() 
+        });
+      }
+      
+      if (parsed.length > 0) {
+        setProducts([...products, ...parsed]);
+        setFileName(`${file.name} — ${parsed.length} products imported`);
+      } else {
+        setFileError("No valid rows found. Check your file format.");
+      }
+    };
+
     if (ext === "csv") {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target?.result as string;
-        const lines = text.trim().split(/\r?\n/).slice(1); // skip header row
-        const parsed: Product[] = [];
-        for (const line of lines) {
-          const cols = line.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
-          if (!cols[0]) continue;
-          parsed.push({ name: cols[0] ?? "", sku: cols[1] ?? "", price: cols[2] ?? "", stock: cols[3] ?? "" });
-        }
-        if (parsed.length > 0) {
-          setProducts([...products, ...parsed]);
-          setFileName(`${file.name} — ${parsed.length} products imported`);
-        } else {
-          setFileError("No rows found. Make sure your CSV has columns: name, SKU, price, stock.");
-        }
-      };
-      reader.readAsText(file);
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => processData(results.data as Record<string, any>[])
+      });
     } else {
-      // xlsx/xls — note to user
-      setFileError("Excel import coming soon. Please export your spreadsheet as CSV and upload that instead.");
-      setFileName(null);
+      // Excel Magic! (.xlsx / .xls)
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet);
+        processData(json as Record<string, any>[]);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  }
+
+  async function handleGoogleSheet() {
+    if (!sheetsUrl) return;
+    setImporting(true);
+    setFileError(null);
+
+    try {
+      // Extract Google Sheet ID from typical URLs
+      // e.g. https://docs.google.com/spreadsheets/d/1BxiMvs0X_5u.../edit#gid=0 -> 1Bxi...
+      const idMatch = sheetsUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (!idMatch || idMatch.length < 2) {
+        throw new Error("Invalid Google Sheets URL structure.");
+      }
+      
+      const sheetId = idMatch[1];
+      // Public export link trick!
+      const csvExportUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+
+      const response = await fetch(csvExportUrl);
+      if (!response.ok) {
+        throw new Error("Could not read sheet. Ensure it is shared 'Anyone with the link can view'.");
+      }
+      
+      const csvText = await response.text();
+      
+      Papa.parse(csvText, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+           const parsed: Product[] = [];
+           for (const row of results.data as Record<string, any>[]) {
+             const rowVals = Object.values(row);
+             const id = row["product_id"] ?? rowVals[0];
+             const name: string = row["product_name"] ?? rowVals[1];
+             if (!name) continue;
+             
+             parsed.push({ 
+                product_id: String(id || "").trim(), 
+                product_name: String(name || "").trim(), 
+                unit: String(row["unit"] ?? rowVals[2] ?? "").trim(), 
+                available_quantity: String(row["available_quantity"] ?? rowVals[3] ?? "").trim(),
+                reorder_threshold: String(row["reorder_threshold"] ?? rowVals[4] ?? "").trim(),
+                unit_price: String(row["unit_price"] ?? rowVals[5] ?? "").trim() 
+             });
+           }
+           
+           if (parsed.length > 0) {
+             setProducts([...products, ...parsed]);
+             setTab("manual"); // jump tab to show them their loaded list naturally!
+           } else {
+             setFileError("Sheet read successfully, but no valid rows found.");
+           }
+        }
+      });
+      
+    } catch (err: any) {
+      setFileError(err.message || "Failed to import from Google Sheets.");
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -120,18 +216,19 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
       {tab === "sheets" && (
         <div className="space-y-2">
           <label className="block text-sm font-semibold text-slate-700">Sheet URL</label>
-          <p className="text-xs text-slate-400">Share the sheet publicly (view only). Expected columns: product name, SKU, price, stock quantity.</p>
+          <p className="text-xs text-slate-400">Share the sheet publicly (view only). Expected columns: product_id, product_name, unit, available_quantity, reorder_threshold, unit_price.</p>
           <div className="flex gap-2 mt-2">
             <input type="url" value={sheetsUrl} onChange={(e) => setSheetsUrl(e.target.value)}
               placeholder="https://docs.google.com/spreadsheets/d/..."
               className={INPUT} />
             <button
-              onClick={() => { setImporting(true); setTimeout(() => setImporting(false), 1500); }}
+              onClick={handleGoogleSheet}
               disabled={!sheetsUrl || importing}
               className="btn-primary px-5 py-3 text-sm font-bold whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
               {importing ? "Importing…" : "Import"}
             </button>
           </div>
+          {fileError && <p className="text-xs text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mt-2">{fileError}</p>}
         </div>
       )}
 
@@ -139,7 +236,7 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
       {tab === "file" && (
         <div className="space-y-3">
           <label className="block text-sm font-semibold text-slate-700">Upload spreadsheet</label>
-          <p className="text-xs text-slate-400">Accepts .csv, .xlsx, or .xls. First row should be headers: name, SKU, price, stock.</p>
+          <p className="text-xs text-slate-400">Accepts .csv, .xlsx, or .xls. First row should be headers match the exact template: product_id, product_name, unit, available_quantity, reorder_threshold, unit_price.</p>
           <div
             onClick={() => fileRef.current?.click()}
             className="border-2 border-dashed border-slate-200 hover:border-teal-300 rounded-xl px-6 py-8 text-center cursor-pointer transition-colors group">
@@ -160,10 +257,12 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
         <div className="space-y-3">
           <div className="grid grid-cols-4 gap-2">
             {([
-              { key: "name",  label: "Product name *",  col: "col-span-2", type: "text" },
-              { key: "sku",   label: "SKU",             col: "",           type: "text" },
-              { key: "price", label: "Price (RM) *",    col: "",           type: "number" },
-              { key: "stock", label: "Stock qty",       col: "",           type: "number" },
+              { key: "product_id",         label: "ID",           col: "",           type: "text" },
+              { key: "product_name",       label: "Name *",       col: "col-span-2", type: "text" },
+              { key: "unit",               label: "Unit",         col: "",           type: "text" },
+              { key: "available_quantity", label: "Available Qty",    col: "",           type: "number" },
+              { key: "reorder_threshold",  label: "Reorder Threshold",      col: "",           type: "number" },
+              { key: "unit_price",         label: "Price(RM)*",   col: "",           type: "number" },
             ] as const).map(({ key, label, col, type }) => (
               <div key={key} className={col}>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">{label}</label>
@@ -173,7 +272,7 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
               </div>
             ))}
           </div>
-          <button onClick={addRow} disabled={!row.name || !row.price}
+          <button onClick={addRow} disabled={!row.product_name || !row.unit_price}
             className="btn-primary px-5 py-2.5 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
             Add product
           </button>
@@ -182,13 +281,15 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
 
       {/* Product list */}
       {products.length > 0 ? (
-        <DataTable headers={["Product", "SKU", "Price", "Stock", ""]}>
+        <DataTable headers={["ID", "Product", "Unit", "Avail Qty", "Reorder Threshold", "Price(RM)", ""]}>
           {products.map((p, i) => (
             <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
-              <td className="px-4 py-3 font-medium text-slate-900">{p.name}</td>
-              <td className="px-4 py-3 text-slate-500 text-xs">{p.sku || "—"}</td>
-              <td className="px-4 py-3 text-slate-700">RM {p.price}</td>
-              <td className="px-4 py-3 text-slate-700">{p.stock || "—"}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{p.product_id}</td>
+              <td className="px-4 py-3 font-medium text-slate-900">{p.product_name}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{p.unit || "—"}</td>
+              <td className="px-4 py-3 text-slate-700 text-xs">{p.available_quantity || "—"}</td>
+              <td className="px-4 py-3 text-slate-500 text-xs">{p.reorder_threshold || "—"}</td>
+              <td className="px-4 py-3 text-slate-700">RM {p.unit_price}</td>
               <td className="px-4 py-3 text-right">
                 <button onClick={() => setProducts(products.filter((_, idx) => idx !== i))}
                   className="text-slate-300 hover:text-red-500 transition-colors text-xs font-medium">Remove</button>
@@ -206,7 +307,7 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
 }
 
 /* ── Step 2: Customers ── */
-function CustomersStep({ customers, setCustomers }: { customers: Customer[]; setCustomers: (c: Customer[]) => void }) {
+function CustomersStep({ customers, setCustomers, onSkip }: { customers: Customer[]; setCustomers: (c: Customer[]) => void; onSkip: () => void }) {
   const [row, setRow] = useState<Customer>({ name: "", phone: "", address: "" });
 
   function addRow() {
@@ -232,10 +333,18 @@ function CustomersStep({ customers, setCustomers }: { customers: Customer[]; set
             </div>
           ))}
         </div>
-        <button onClick={addRow} disabled={!row.name || !row.phone}
-          className="btn-primary px-5 py-2.5 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
-          Add customer
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={addRow} disabled={!row.name || !row.phone}
+            className="btn-primary px-5 py-2.5 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
+            Add customer
+          </button>
+          {customers.length === 0 && (
+            <button onClick={onSkip}
+              className="px-5 py-2.5 text-sm font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors">
+              No Valid Customer
+            </button>
+          )}
+        </div>
       </div>
       {customers.length > 0 ? (
         <DataTable headers={["Nickname", "WhatsApp", "Address", ""]}>
@@ -276,8 +385,20 @@ function Toggle({ on, onChange, label, desc }: { on: boolean; onChange: (v: bool
   );
 }
 
-function RulesStep({ rules, setRules }: { rules: Rules; setRules: (r: Rules) => void }) {
+function RulesStep({ rules, setRules, products }: { rules: Rules; setRules: (r: Rules) => void; products: Product[] }) {
   function set<K extends keyof Rules>(k: K, v: Rules[K]) { setRules({ ...rules, [k]: v }); }
+  
+  function updateSub(productId: string, field: "substitute_id" | "discount", value: string) {
+    const existing = rules.substitutions[productId] || { substitute_id: "N/A", discount: "" };
+    set("substitutions", {
+      ...rules.substitutions,
+      [productId]: {
+        ...existing,
+        [field]: value
+      }
+    });
+  }
+
   return (
     <div className="space-y-2">
       <p className="text-sm text-slate-500 mb-4">These rules are applied to every order quote automatically.</p>
@@ -292,17 +413,67 @@ function RulesStep({ rules, setRules }: { rules: Rules; setRules: (r: Rules) => 
                        focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300" />
         </div>
       </div>
-      <div className="border-b border-slate-100">
+      <div className="border-b border-slate-100 pb-5">
         <Toggle on={rules.allowDiscount} onChange={(v) => set("allowDiscount", v)}
           label="Allow substitution discount"
           desc="When an item is out of stock, offer an alternative at a slight discount rather than rejecting the order." />
-        {rules.allowDiscount && (
-          <div className="pb-4 flex items-center gap-3">
-            <span className="text-sm text-slate-600">Maximum discount</span>
-            <input type="number" min="0" max="50" value={rules.discountPct} onChange={(e) => set("discountPct", e.target.value)}
-              className="w-16 px-3 py-2 rounded-lg border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
-            <span className="text-sm text-slate-600">%</span>
+        {rules.allowDiscount && products.length > 0 && (
+          <div className="mt-2">
+            <DataTable headers={["ID", "Product", "Substitute Product", "Discount"]}>
+              {products.map((p) => {
+                const sub = rules.substitutions[p.product_id] || { substitute_id: "N/A", discount: "" };
+                const isNA = sub.substitute_id === "N/A" || !sub.substitute_id;
+                
+                return (
+                  <tr key={p.product_id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-4 py-3 text-slate-500 text-xs">{p.product_id}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900 text-sm">{p.product_name}</td>
+                    <td className="px-4 py-3">
+                      <select 
+                        value={sub.substitute_id || "N/A"} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          updateSub(p.product_id, "substitute_id", val);
+                          if (val === "N/A") updateSub(p.product_id, "discount", ""); // clear discount if N/A
+                        }}
+                        className="w-full max-w-[200px] px-2 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        <option value="N/A">N/A</option>
+                        {products
+                          .filter(opt => opt.product_id !== p.product_id) // don't substitute with itself
+                          .map(opt => (
+                            <option key={opt.product_id} value={opt.product_id}>
+                              {opt.product_name}
+                            </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      {isNA ? (
+                        <span className="text-slate-400 text-xs italic">N/A</span>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <input 
+                            type="number" min="0" max="100" 
+                            value={sub.discount || ""} 
+                            placeholder="10"
+                            onChange={(e) => updateSub(p.product_id, "discount", e.target.value)}
+                            className="w-16 px-2 py-1.5 rounded-lg border border-slate-200 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500" 
+                          />
+                          <span className="text-xs text-slate-500">%</span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </DataTable>
           </div>
+        )}
+        {rules.allowDiscount && products.length === 0 && (
+           <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mt-2 border border-amber-200 inline-block">
+             You need to add products in Step 1 to configure substitutions.
+           </p>
         )}
       </div>
       <div>
@@ -411,11 +582,12 @@ export default function GetStartedPage() {
   const [merchantId, setMerchantId] = useState<string | null>(null);
   const [products,  setProducts]    = useState<Product[]>([]);
   const [customers, setCustomers]   = useState<Customer[]>([]);
-  const [rules, setRules]           = useState<Rules>({ minOrderValue: "50", allowDiscount: true, discountPct: "10", chargeDelivery: true, deliveryFee: "15" });
+  const [rules, setRules]           = useState<Rules>({ minOrderValue: "50", allowDiscount: true, substitutions: {}, chargeDelivery: true, deliveryFee: "15" });
   const [team, setTeam]             = useState<TeamMember[]>([]);
   // Track steps the user proceeded through without adding data
   const [warnedEmpty, setWarnedEmpty] = useState<Set<number>>(new Set());
   const [showEmptyWarning, setShowEmptyWarning] = useState(false);
+  const [skippedSteps, setSkippedSteps] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     (async () => {
@@ -427,10 +599,10 @@ export default function GetStartedPage() {
   }, [router]);
 
   const stepHasData = [
-    products.length > 0,
-    customers.length > 0,
+    products.length > 0 || skippedSteps.has(0),
+    customers.length > 0 || skippedSteps.has(1),
     true, // business rules always has defaults
-    team.length > 0,
+    team.length > 0 || skippedSteps.has(3),
   ];
 
   function tryAdvance() {
@@ -459,9 +631,15 @@ export default function GetStartedPage() {
     setSaving(true);
     try {
       if (products.length > 0) {
+        // Mapping our UI model to Supabase table schema
         await supabase.from("product").insert(products.map(p => ({
-          merchant_id: merchantId, product_name: p.name, product_sku: p.sku || null,
-          unit_price: parseFloat(p.price) || 0, stock_quantity: parseInt(p.stock) || 0, slang_aliases: [],
+          merchant_id: merchantId, 
+          product_name: p.product_name, 
+          product_sku: p.product_id || null, // mapping UI 'product_id' to logic 'product_sku' temp
+          unit_price: parseFloat(p.unit_price) || 0, 
+          stock_quantity: parseInt(p.available_quantity) || 0,
+          /* Note: unit, reorder_threshold, supplier_id might need columns backed in Supabase */
+          slang_aliases: [],
         })));
       }
       if (customers.length > 0) {
@@ -471,7 +649,7 @@ export default function GetStartedPage() {
       }
       const rulesText = [
         `Minimum order value: RM${rules.minOrderValue}.`,
-        rules.allowDiscount ? `May offer up to ${rules.discountPct}% discount for substitute items.` : "Do not offer discounts for substitutes.",
+        rules.allowDiscount ? `Substitutions allowed.` : "Do not offer discounts for substitutes.",
         rules.chargeDelivery ? `Charge delivery fee. Flat rate: RM${rules.deliveryFee || "0 (use live Lalamove price)"}.` : "Delivery fee absorbed by merchant.",
       ].join(" ");
       await supabase.from("knowledge_base").upsert({ merchant_id: merchantId, content: rulesText, document_type: "business_rules" }, { onConflict: "merchant_id,document_type" });
@@ -583,8 +761,8 @@ export default function GetStartedPage() {
             </div>
 
             {step === 0 && <InventoryStep  products={products}   setProducts={setProducts} />}
-            {step === 1 && <CustomersStep customers={customers} setCustomers={setCustomers} />}
-            {step === 2 && <RulesStep     rules={rules}         setRules={setRules} />}
+            {step === 1 && <CustomersStep customers={customers} setCustomers={setCustomers} onSkip={() => { setSkippedSteps(s => new Set([...s, 1])); setShowEmptyWarning(false); setStep(2); }} />}
+            {step === 2 && <RulesStep     rules={rules}         setRules={setRules}     products={products} />}
             {step === 3 && <TeamStep      team={team}           setTeam={setTeam} />}
           </div>
 
