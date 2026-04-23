@@ -1,20 +1,99 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 
-function SupplyLahLogo() {
+/* ── Shared slide data ─────────────────────────── */
+const SLIDES = [
+  {
+    mascot: "/tiredchaos.png",
+    title: "Tired of WhatsApp\nOrder Chaos?",
+    desc: "200 messages a day. Price negotiations over voice note. Orders slipping through at 2am. We built this so you don't have to deal with that anymore.",
+  },
+  {
+    mascot: "/bahasarojak.png",
+    title: "Voice Notes, Text, or\nHandwritten Lists",
+    desc: 'Whether a voice note in Bahasa Rojak or a photo of a handwritten list, our AI gets it. Send orders exactly how your customers do, no typing or translation needed.',
+  },
+  {
+    mascot: "/logistic.png",
+    title: "Instant Logistics\nWithout the Calls",
+    desc: "Order confirmed? Delivery is already in motion. No manual entry. No booking errors. Just an automated tracking link sent straight to your customer.",
+  },
+    {
+    mascot: "/mascot-hero.png",
+    title: "Google Sheets Sync\nIn Real-Time",
+    desc: "Still using whiteboards? We sync directly with your Google Sheets. Every quote is cross-referenced with your actual warehouse stock to prevent over-ordering and wasted stock.",
+  },
+  {
+    mascot: "/mascot-working.png",
+    title: "Full Control Staff \nCommand Center",
+    desc: "One dashboard to rule them all. Monitor every order, track every driver, and handle 'Red Alerts' with one click. Total visibility for you and your warehouse manager.",
+  },
+  {
+    mascot: "/mascot-celebration.png",
+    title: "Enterprise-Grade\nPrivacy & PDPA",
+    desc: "Your data stays yours. Fully PDPA 2010 compliant with single-tenant database security. We only keep raw content for 90 days, you're always in total control of your business data.",
+  },
+];
+
+function LeftPanel() {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    const t = setInterval(() => setCurrent((c) => (c + 1) % SLIDES.length), 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  const slide = SLIDES[current];
+
   return (
-    <Link href="/" className="flex justify-center my-6">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img 
-        src="/logo.png" 
-        alt="SupplyLah" 
-        className="h-12 md:h-16 w-auto scale-[1.5] md:scale-[2] origin-center object-contain" 
-      />
-    </Link>
+    <div className="hidden lg:flex lg:w-5/12 bg-teal-900 flex-col items-center justify-center p-12 relative overflow-hidden">
+      <div className="absolute top-0 left-0 w-72 h-72 bg-teal-800 rounded-full -translate-x-1/2 -translate-y-1/2 opacity-50" />
+      <div className="absolute bottom-0 right-0 w-56 h-56 bg-teal-700 rounded-full translate-x-1/3 translate-y-1/3 opacity-40" />
+      <div className="absolute top-1/2 left-1/4 w-48 h-48 bg-teal-600 rounded-full opacity-10 blur-3xl" />
+
+      <div className="relative z-10 text-center max-w-sm w-full">
+        {/* Mascot crossfade */}
+        <div className="relative w-52 h-52 mx-auto mb-7">
+          {SLIDES.map((s, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={i}
+              src={s.mascot}
+              alt=""
+              className={`absolute inset-0 w-full h-full object-contain drop-shadow-2xl transition-opacity duration-700 ${i === current ? "opacity-100 animate-float" : "opacity-0"}`}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ))}
+        </div>
+
+        {/* Text fade-slide on change */}
+        <div key={current} style={{ animation: "fadeSlideIn 0.6s ease-out both" }}>
+          <h2 className="text-3xl lg:text-4xl font-black text-white mb-4 leading-tight whitespace-pre-line">
+            {slide.title}
+          </h2>
+          <p className="text-teal-200 text-sm lg:text-base leading-relaxed">
+            {slide.desc}
+          </p>
+        </div>
+
+        {/* Dot indicators */}
+        <div className="flex justify-center gap-2 mt-8">
+          {SLIDES.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setCurrent(i)}
+              className={`rounded-full transition-all duration-300 ${
+                i === current ? "w-6 h-2 bg-teal-300" : "w-2 h-2 bg-teal-700 hover:bg-teal-500"
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -31,18 +110,13 @@ interface FormData {
 export default function SignupPage() {
   const router = useRouter();
   const [form, setForm] = useState<FormData>({
-    businessName: "",
-    fullName: "",
-    email: "",
-    phone: "",
-    password: "",
-    confirmPassword: "",
-    agreed: false,
+    businessName: "", fullName: "", email: "",
+    phone: "", password: "", confirmPassword: "", agreed: false,
   });
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
-  const [success,  setSuccess]  = useState(false);
-  const [showPw,   setShowPw]   = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [showPw,  setShowPw]  = useState(false);
 
   function update(field: keyof FormData, value: string | boolean) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -51,68 +125,32 @@ export default function SignupPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-
-    if (form.password !== form.confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    if (form.password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-    if (!form.agreed) {
-      setError("Please agree to the Terms of Service and Privacy Policy.");
-      return;
-    }
+    if (form.password !== form.confirmPassword) { setError("Passwords do not match."); return; }
+    if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (!form.agreed) { setError("Please agree to the Terms of Service and Privacy Policy."); return; }
 
     setLoading(true);
-
     const { error: authError } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
-      options: {
-        data: {
-          full_name:     form.fullName,
-          business_name: form.businessName,
-          phone:         form.phone,
-        },
-      },
+      options: { data: { full_name: form.fullName, business_name: form.businessName, phone: form.phone } },
     });
-
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
-    } else {
-      setSuccess(true);
-      setTimeout(() => router.push("/dashboard"), 3000);
-    }
+    if (authError) { setError(authError.message); setLoading(false); }
+    else { setSuccess(true); setTimeout(() => router.push("/dashboard"), 3000); }
   }
 
-  /* ── Success state ── */
   if (success) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-teal-50 px-6">
         <div className="max-w-md w-full text-center bg-white rounded-3xl shadow-xl p-10 border border-teal-100">
           <div className="w-24 h-24 mx-auto mb-6 rounded-2xl bg-teal-100 flex items-center justify-center overflow-hidden">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/mascot-celebration.png"
-              alt="Celebrating"
-              className="w-full h-full object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-                (e.target as HTMLImageElement).parentElement!.innerHTML += `<span class="text-5xl">🎉</span>`;
-              }}
-            />
+            <img src="/mascot-celebration.png" alt="🎉" className="w-full h-full object-contain"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML += `<span class="text-5xl">🎉</span>`; }} />
           </div>
           <h2 className="text-2xl font-black text-teal-900 mb-2">Welcome to SupplyLah!</h2>
-          <p className="text-slate-500 text-sm mb-6">
-            Check your email to verify your account. Redirecting to dashboard in a moment…
-          </p>
-          <Link
-            href="/dashboard"
-            className="inline-block bg-teal-600 hover:bg-teal-700 text-white font-bold px-8 py-3 rounded-xl text-sm transition-all"
-          >
+          <p className="text-slate-500 text-sm mb-6">Check your email to verify your account. Redirecting to dashboard…</p>
+          <Link href="/dashboard" className="btn-primary inline-block px-8 py-3 text-sm font-bold">
             Go to Dashboard →
           </Link>
         </div>
@@ -120,266 +158,182 @@ export default function SignupPage() {
     );
   }
 
+  const strength =
+    (form.password.length >= 8 ? 1 : 0) +
+    (/[A-Z]/.test(form.password) ? 1 : 0) +
+    (/[0-9]/.test(form.password) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(form.password) ? 1 : 0);
+
   return (
-    <div className="min-h-screen flex">
-      {/* ── Left panel ── */}
-      <div className="hidden lg:flex lg:w-5/12 bg-teal-900 flex-col items-center justify-center p-12 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-64 h-64 bg-teal-800 rounded-full -translate-x-1/2 -translate-y-1/2 opacity-60" />
-        <div className="absolute bottom-0 right-0 w-48 h-48 bg-teal-700 rounded-full translate-x-1/3 translate-y-1/3 opacity-40" />
+    <>
+      <style>{`
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
 
-        <div className="relative z-10 text-center max-w-sm">
-          <div className="w-52 h-52 mx-auto mb-8 rounded-3xl bg-teal-800/60 flex items-center justify-center overflow-hidden animate-float">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/mascot-hero.png"
-              alt="SupplyLah mascot"
-              className="w-full h-full object-contain"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = "none";
-                (e.target as HTMLImageElement).parentElement!.innerHTML += `<span class="text-8xl">🦦</span>`;
-              }}
-            />
-          </div>
-          <h2 className="text-2xl font-black text-white mb-3">
-            Start automating today
-          </h2>
-          <p className="text-teal-300 text-sm leading-relaxed mb-6">
-            Join Malaysian wholesalers who have stopped drowning in WhatsApp messages.
-          </p>
+      <div className="min-h-screen flex">
+        <LeftPanel />
 
-          {/* Feature list */}
-          <div className="space-y-3 text-left">
-            {[
-              "🌏 Reads Bahasa Rojak, Malay & English",
-              "📦 Live stock check on every order",
-              "🚚 Auto Lalamove booking",
-              "📊 Real-time operations dashboard",
-              "🔒 PDPA-compliant data handling",
-            ].map((f) => (
-              <div key={f} className="flex items-center gap-2 text-sm text-teal-200">
-                <span>{f}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+        {/* ── Right panel — centred ── */}
+        <div className="flex-1 flex items-center justify-center px-10 py-10 bg-white overflow-y-auto">
+          <div className="w-full max-w-lg">
 
-      {/* ── Right panel (form) ── */}
-      <div className="flex-1 flex items-center justify-center px-6 py-10 bg-white overflow-y-auto">
-        <div className="w-full max-w-md">
-          <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-teal-700 mb-8 transition-colors">
-            ← Back to home
-          </Link>
+            {/* Back link */}
+            <Link href="/"
+              className="group relative inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-teal-800 mb-6 px-3 py-1.5 rounded-lg overflow-hidden transition-colors duration-200 -ml-3">
+              <span className="absolute inset-0 bg-teal-50 rounded-lg scale-90 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-250 ease-out" />
+              <span className="relative z-10 flex items-center gap-1.5">
+                <span className="group-hover:-translate-x-1 transition-transform duration-200 inline-block">←</span>
+                Back to home
+              </span>
+            </Link>
 
-          <SupplyLahLogo />
+            {/* Logo — bigger */}
+            <Link href="/" className="flex mb-5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo.png" alt="SupplyLah"
+                className="h-16 md:h-20 w-auto scale-[2.5] origin-left object-contain" />
+            </Link>
 
-          <div className="mt-8 mb-6">
-            <h1 className="text-2xl font-black text-slate-900">Create your account</h1>
-            <p className="text-slate-500 text-sm mt-1">
-              Already have an account?{" "}
-              <Link href="/login" className="text-teal-600 font-semibold hover:text-teal-800 transition-colors">
-                Log in
-              </Link>
-            </p>
-          </div>
-
-          {/* Error banner */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-5 text-sm text-red-700 flex items-start gap-2">
-              <span className="mt-0.5">⚠️</span>
-              <span>{error}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSignup} className="space-y-4">
-            {/* Business name */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                Business / Company Name
-              </label>
-              <input
-                type="text"
-                required
-                value={form.businessName}
-                onChange={(e) => update("businessName", e.target.value)}
-                placeholder="Ahmad Brothers Trading"
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
-                           focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300"
-              />
+            <div className="mb-8">
+              <h1 className="text-3xl lg:text-3xl font-black text-slate-900">Create your account</h1>
+              <p className="text-slate-500 text-base mt-2">
+                Already have one?{" "}
+                <Link href="/login" className="text-teal-600 font-semibold hover:text-teal-800 underline-offset-2 hover:underline transition-colors">
+                  Log in →
+                </Link>
+              </p>
             </div>
 
-            {/* Full name */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-                Full Name
-              </label>
-              <input
-                type="text"
-                required
-                value={form.fullName}
-                onChange={(e) => update("fullName", e.target.value)}
-                placeholder="Ahmad bin Abdullah"
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
-                           focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300"
-              />
-            </div>
-
-            {/* Email + Phone (side by side) */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email</label>
-                <input
-                  type="email"
-                  required
-                  value={form.email}
-                  onChange={(e) => update("email", e.target.value)}
-                  placeholder="you@company.com"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
-                             focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Phone (WhatsApp)</label>
-                <input
-                  type="tel"
-                  value={form.phone}
-                  onChange={(e) => update("phone", e.target.value)}
-                  placeholder="+601X-XXXXXXX"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
-                             focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300"
-                />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">Password</label>
-              <div className="relative">
-                <input
-                  type={showPw ? "text" : "password"}
-                  required
-                  value={form.password}
-                  onChange={(e) => update("password", e.target.value)}
-                  placeholder="Min. 8 characters"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
-                             focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300 pr-12"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw(!showPw)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  {showPw ? "🙈" : "👁"}
-                </button>
-              </div>
-            </div>
-
-            {/* Confirm password */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-1.5">Confirm Password</label>
-              <input
-                type={showPw ? "text" : "password"}
-                required
-                value={form.confirmPassword}
-                onChange={(e) => update("confirmPassword", e.target.value)}
-                placeholder="Repeat your password"
-                className={`w-full px-4 py-3 rounded-xl border text-slate-900 placeholder-slate-400 text-sm
-                           focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all
-                           ${form.confirmPassword && form.confirmPassword !== form.password
-                             ? "border-red-300 bg-red-50"
-                             : "border-slate-200 hover:border-teal-300"}`}
-              />
-              {form.confirmPassword && form.confirmPassword !== form.password && (
-                <p className="text-xs text-red-500 mt-1">Passwords don&apos;t match</p>
-              )}
-            </div>
-
-            {/* Password strength indicator */}
-            {form.password && (
-              <div className="space-y-1.5">
-                <div className="flex gap-1">
-                  {[1, 2, 3, 4].map((n) => {
-                    const strength =
-                      (form.password.length >= 8 ? 1 : 0) +
-                      (/[A-Z]/.test(form.password) ? 1 : 0) +
-                      (/[0-9]/.test(form.password) ? 1 : 0) +
-                      (/[^A-Za-z0-9]/.test(form.password) ? 1 : 0);
-                    return (
-                      <div
-                        key={n}
-                        className={`flex-1 h-1.5 rounded-full transition-colors ${
-                          n <= strength
-                            ? strength <= 1 ? "bg-red-400"
-                              : strength <= 2 ? "bg-yellow-400"
-                              : strength <= 3 ? "bg-teal-400"
-                              : "bg-teal-600"
-                            : "bg-slate-200"
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
-                <p className="text-xs text-slate-400">
-                  Tip: mix uppercase, numbers, and symbols for a stronger password
-                </p>
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-6 text-sm text-red-700 flex items-start gap-2">
+                <span className="mt-0.5">⚠️</span><span>{error}</span>
               </div>
             )}
 
-            {/* Terms */}
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.agreed}
-                onChange={(e) => update("agreed", e.target.checked)}
-                className="mt-0.5 w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-400 cursor-pointer"
-              />
-              <span className="text-xs text-slate-500 leading-relaxed">
-                I agree to the{" "}
-                <span className="text-teal-600 font-semibold cursor-pointer hover:underline">Terms of Service</span>
-                {" "}and{" "}
-                <span className="text-teal-600 font-semibold cursor-pointer hover:underline">Privacy Policy</span>.
-                Your data is handled in compliance with Malaysia&apos;s PDPA 2010.
-              </span>
-            </label>
+            <form onSubmit={handleSignup} className="space-y-4">
+              {/* Row 1: Business name | Full name */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Business Name</label>
+                  <input type="text" required value={form.businessName}
+                    onChange={(e) => update("businessName", e.target.value)}
+                    placeholder="Ahmad Brothers Trading"
+                    className="w-full px-4 py-3.5 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Full Name</label>
+                  <input type="text" required value={form.fullName}
+                    onChange={(e) => update("fullName", e.target.value)}
+                    placeholder="Ahmad bin Abdullah"
+                    className="w-full px-4 py-3.5 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300" />
+                </div>
+              </div>
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading || !form.agreed}
-              className="w-full bg-teal-600 hover:bg-teal-700 active:bg-teal-800 disabled:bg-teal-300
-                         text-white font-bold py-3.5 rounded-xl text-sm shadow-sm hover:shadow-md
-                         transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:ring-offset-2 mt-2"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                  </svg>
-                  Creating account…
-                </span>
-              ) : (
-                "Create account — it's free →"
+              {/* Row 2: Email | Phone */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email</label>
+                  <input type="email" required value={form.email}
+                    onChange={(e) => update("email", e.target.value)}
+                    placeholder="you@company.com"
+                    className="w-full px-4 py-3.5 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Phone (WhatsApp)</label>
+                  <input type="tel" value={form.phone}
+                    onChange={(e) => update("phone", e.target.value)}
+                    placeholder="+601X-XXXXXXX"
+                    className="w-full px-4 py-3.5 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300" />
+                </div>
+              </div>
+
+              {/* Row 3: Password | Confirm */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Password</label>
+                  <div className="relative">
+                    <input type={showPw ? "text" : "password"} required value={form.password}
+                      onChange={(e) => update("password", e.target.value)}
+                      placeholder="Min. 8 characters"
+                      className="w-full px-4 py-3.5 rounded-xl border border-slate-200 text-slate-900 placeholder-slate-400 text-sm
+                                 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all hover:border-teal-300 pr-11" />
+                    <button type="button" onClick={() => setShowPw(!showPw)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 transition-colors text-base">
+                      {showPw ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-1.5">Confirm Password</label>
+                  <input type={showPw ? "text" : "password"} required value={form.confirmPassword}
+                    onChange={(e) => update("confirmPassword", e.target.value)}
+                    placeholder="Repeat your password"
+                    className={`w-full px-4 py-3.5 rounded-xl border text-slate-900 placeholder-slate-400 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent transition-all
+                               ${form.confirmPassword && form.confirmPassword !== form.password
+                                 ? "border-red-300 bg-red-50" : "border-slate-200 hover:border-teal-300"}`} />
+                  {form.confirmPassword && form.confirmPassword !== form.password && (
+                    <p className="text-xs text-red-500 mt-1">Passwords don&apos;t match</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Password strength */}
+              {form.password && (
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1 flex-1">
+                    {[1, 2, 3, 4].map((n) => (
+                      <div key={n} className={`flex-1 h-1.5 rounded-full transition-colors ${
+                        n <= strength
+                          ? strength <= 1 ? "bg-red-400" : strength <= 2 ? "bg-yellow-400" : strength <= 3 ? "bg-teal-400" : "bg-teal-600"
+                          : "bg-slate-200"
+                      }`} />
+                    ))}
+                  </div>
+                  <span className="text-xs text-slate-400 w-12 text-right">
+                    {strength <= 1 ? "Weak" : strength <= 2 ? "Fair" : strength <= 3 ? "Good" : "Strong"}
+                  </span>
+                </div>
               )}
-            </button>
-          </form>
 
-          {/* Divider */}
-          <div className="my-5 flex items-center gap-3">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="text-xs text-slate-400 font-medium">OR</span>
-            <div className="flex-1 h-px bg-slate-200" />
+              {/* Terms */}
+              <label className="flex items-start gap-3 cursor-pointer pt-0.5">
+                <input type="checkbox" checked={form.agreed}
+                  onChange={(e) => update("agreed", e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-400 cursor-pointer shrink-0" />
+                <span className="text-xs text-slate-500 leading-relaxed">
+                  I agree to the{" "}
+                  <span className="text-teal-600 font-semibold cursor-pointer hover:underline underline-offset-2">Terms of Service</span>
+                  {" "}and{" "}
+                  <span className="text-teal-600 font-semibold cursor-pointer hover:underline underline-offset-2">Privacy Policy</span>.
+                  Your data is handled in compliance with Malaysia&apos;s PDPA 2010.
+                </span>
+              </label>
+
+              {/* Submit */}
+              <button type="submit" disabled={loading || !form.agreed}
+                className="btn-primary w-full py-4 text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    Creating account…
+                  </span>
+                ) : "Create account — it's free →"}
+              </button>
+            </form>
           </div>
-
-          {/* Demo access */}
-          <Link
-            href="/dashboard"
-            className="w-full flex items-center justify-center gap-2 border-2 border-slate-200 hover:border-teal-300 text-slate-600 hover:text-teal-700 font-semibold py-3 rounded-xl text-sm transition-all"
-          >
-            <span>👀</span> Try demo without signing up
-          </Link>
         </div>
       </div>
-    </div>
+    </>
   );
 }
