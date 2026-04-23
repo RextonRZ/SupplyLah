@@ -535,7 +535,7 @@ export default function GetStartedPage() {
       <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
         <Link href="/">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo.png" alt="SupplyLah" className="h-10 w-auto scale-[2] origin-left object-contain" />
+          <img src="/logo.png" alt="SupplyLah" className="h-10 md:h-12 w-auto scale-[2] md:scale-[2.5] origin-left object-contain" />
         </Link>
         <div className="flex items-center gap-3">
           <span className="text-xs text-slate-400">Step {step + 1} of {STEPS.length}</span>

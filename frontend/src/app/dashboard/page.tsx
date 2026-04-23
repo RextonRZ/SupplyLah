@@ -195,47 +195,141 @@ function ProfileMenu({ profile, isAuthenticated, onLogout }: {
   );
 }
 
+/* ── Skeleton components ── */
+function Sk({ className }: { className?: string }) {
+  return <div className={`skeleton ${className ?? ""}`} />;
+}
+
+function DashboardSkeleton() {
+  return (
+    <main className="px-6 py-4 space-y-4">
+      {/* Stat bar */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="bg-white rounded-xl border border-slate-200 p-3 flex flex-col items-center gap-2">
+            <Sk className="h-7 w-12 rounded-lg" />
+            <Sk className="h-3 w-14 rounded-md" />
+          </div>
+        ))}
+      </div>
+
+      {/* Main grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        {/* Kanban — 3 columns */}
+        <div className="lg:col-span-3 grid grid-cols-3 gap-3">
+          {Array.from({ length: 3 }).map((_, col) => (
+            <div key={col} className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+              <Sk className="h-4 w-24 rounded-md" />
+              {Array.from({ length: col === 1 ? 3 : 2 }).map((_, i) => (
+                <div key={i} className="bg-slate-50 rounded-xl p-3 space-y-2">
+                  <Sk className="h-3 w-full rounded-md" />
+                  <Sk className="h-3 w-3/4 rounded-md" />
+                  <div className="flex justify-between pt-1">
+                    <Sk className="h-3 w-16 rounded-md" />
+                    <Sk className="h-5 w-20 rounded-full" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {/* Sidebar */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+            <Sk className="h-4 w-20 rounded-md" />
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Sk className="h-8 w-8 rounded-full shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <Sk className="h-3 w-full rounded-md" />
+                  <Sk className="h-2.5 w-2/3 rounded-md" />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+            <Sk className="h-4 w-24 rounded-md" />
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex justify-between items-center">
+                <Sk className="h-3 w-28 rounded-md" />
+                <Sk className="h-3 w-12 rounded-md" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 export default function Dashboard() {
   const router = useRouter();
-  const [merchantId, setMerchantId] = useState<string>(DEMO_MERCHANT_ID);
+
+  // merchantId is null until resolved — prevents early wrong fetch
+  const [merchantId, setMerchantId] = useState<string | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [setupDismissed, setSetupDismissed] = useState(false);
+  const [onboardingComplete, setOnboardingComplete] = useState(true); // assume complete to avoid flash
   const [profile, setProfile] = useState<UserProfile>({
-    fullName: "User",
-    businessName: "My Business",
-    email: "",
-    initials: "U",
+    fullName: "User", businessName: "My Business", email: "", initials: "U",
   });
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders]     = useState<Order[]>([]);
   const [inventory, setInventory] = useState<Product[]>([]);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [stats, setStats]       = useState<DashboardStats | null>(null);
   const [activeTab, setActiveTab] = useState<"command" | "demo">("command");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [loading, setLoading]   = useState(true); // skeleton until first fetch done
 
-  /* Load user profile + merchant */
+  /* Resolve auth + merchant, THEN set merchantId to trigger fetch */
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
 
-      const meta = user.user_metadata || {};
-      const fullName    = meta.full_name     || user.email?.split("@")[0] || "User";
-      const businessName = meta.business_name || "My Business";
-      const email       = user.email || "";
-      const initials    = (fullName.split(" ").map((w: string) => w[0]).join("").toUpperCase()).slice(0, 2) || "U";
+      if (user) {
+        setIsAuthenticated(true);
+        const meta = user.user_metadata || {};
+        const fullName     = meta.full_name     || user.email?.split("@")[0] || "User";
+        const businessName = meta.business_name || "My Business";
+        const email        = user.email || "";
+        const initials     = (fullName.split(" ").map((w: string) => w[0]).join("").toUpperCase()).slice(0, 2) || "U";
+        setProfile({ fullName, businessName, email, initials });
+        const { data: merchant } = await supabase
+          .from("merchant")
+          .select("merchant_id, company_name")
+          .eq("user_id", user.id)
+          .single();
 
-      setProfile({ fullName, businessName, email, initials });
+        if (merchant?.merchant_id) {
+          if (merchant.company_name) setProfile(p => ({ ...p, businessName: merchant.company_name }));
+          setMerchantId(merchant.merchant_id);
 
-      const { data: merchant } = await supabase
-        .from("merchant")
-        .select("merchant_id, company_name")
-        .eq("user_id", user.id)
-        .single();
-
-      if (merchant?.merchant_id) {
-        setMerchantId(merchant.merchant_id);
-        if (merchant.company_name) {
-          setProfile(p => ({ ...p, businessName: merchant.company_name }));
+          // Check if actually set up: metadata flag OR has products
+          const flagDone = meta.onboarding_complete === true;
+          if (!flagDone) {
+            const { count } = await supabase
+              .from("product")
+              .select("*", { count: "exact", head: true })
+              .eq("merchant_id", merchant.merchant_id);
+            setOnboardingComplete((count ?? 0) > 0);
+          } else {
+            setOnboardingComplete(true);
+          }
+          return;
         }
+
+        // Authenticated but no merchant row yet — show empty dashboard, not demo data
+        setOnboardingComplete(false);
+        setOrders([]);
+        setInventory([]);
+        setStats({ total_today: 0, pending: 0, awaiting_confirmation: 0, confirmed: 0, dispatched: 0, failed: 0, requires_review: 0 });
+        setLastRefresh(new Date());
+        setLoading(false);
+        return;
       }
+
+      // Not logged in — demo mode, load demo data
+      setMerchantId(DEMO_MERCHANT_ID);
     })();
   }, []);
 
@@ -244,90 +338,114 @@ export default function Dashboard() {
     router.push("/login");
   }
 
-  const fetchData = useCallback(async () => {
-    const [ordersResult, inventoryResult, statsResult] = await Promise.allSettled([
-      fetch(`${BACKEND_URL}/api/orders?merchant_id=${merchantId}`),
-      fetch(`${BACKEND_URL}/api/inventory?merchant_id=${merchantId}`),
-      fetch(`${BACKEND_URL}/api/stats?merchant_id=${merchantId}`),
-    ]);
+  async function handleRefresh() {
+    if (!merchantId) return;
+    setLoading(true);
+    await fetchData(merchantId);
+  }
 
+  const fetchData = useCallback(async (mid: string) => {
+    const [ordersResult, inventoryResult, statsResult] = await Promise.allSettled([
+      fetch(`${BACKEND_URL}/api/orders?merchant_id=${mid}`),
+      fetch(`${BACKEND_URL}/api/inventory?merchant_id=${mid}`),
+      fetch(`${BACKEND_URL}/api/stats?merchant_id=${mid}`),
+    ]);
     if (ordersResult.status === "fulfilled" && ordersResult.value.ok) {
-      const d = await ordersResult.value.json();
-      setOrders(d.orders || []);
+      setOrders((await ordersResult.value.json()).orders || []);
     }
     if (inventoryResult.status === "fulfilled" && inventoryResult.value.ok) {
-      const d = await inventoryResult.value.json();
-      setInventory(d.inventory || []);
+      setInventory((await inventoryResult.value.json()).inventory || []);
     }
     if (statsResult.status === "fulfilled" && statsResult.value.ok) {
       setStats(await statsResult.value.json());
     }
     setLastRefresh(new Date());
-  }, [merchantId]);
+    setLoading(false);
+  }, []);
 
+  /* Only start fetching once merchantId is resolved */
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60_000);
+    if (!merchantId) return;
+    fetchData(merchantId);
+    const interval = setInterval(() => fetchData(merchantId), 60_000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [merchantId, fetchData]);
 
   useEffect(() => {
     const channel = supabase
       .channel("order-changes")
       .on("postgres_changes", { event: "*", schema: "public", table: "order" }, () => {
-        fetchData();
+        if (merchantId) fetchData(merchantId);
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [fetchData]);
+  }, [merchantId, fetchData]);
 
   const alertCount = orders.filter(
     (o) => o.requires_human_review && o.order_status !== "Confirmed" && o.order_status !== "Dispatched"
   ).length;
 
+  const showSetupBanner = isAuthenticated && !onboardingComplete && !setupDismissed;
+
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Nav */}
-      <nav className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
-        {/* Left: logo + badge */}
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard" className="flex items-center shrink-0">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo.png"
-              alt="SupplyLah"
-              className="h-10 md:h-12 w-auto scale-[2] md:scale-[2.5] origin-left object-contain"
-            />
+      {/* Setup banner */}
+      {showSetupBanner && (
+        <div className="sticky top-0 z-20 bg-teal-900 px-6 py-2.5 flex items-center gap-4">
+          {/* Progress dots */}
+          <div className="hidden sm:flex items-center gap-1 shrink-0">
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full bg-teal-700" />
+            ))}
+          </div>
+          <div className="flex-1 flex items-center gap-2 min-w-0">
+            <span className="text-teal-400 text-xs font-bold uppercase tracking-widest shrink-0">Setup</span>
+            <span className="text-white text-sm truncate">
+              Your store isn&apos;t ready yet — orders can&apos;t come in until you finish setup.
+            </span>
+          </div>
+          <Link href="/get-started"
+            className="shrink-0 text-xs font-bold text-teal-900 bg-teal-300 hover:bg-teal-200 px-4 py-1.5 rounded-lg transition-colors whitespace-nowrap">
+            Finish setup →
           </Link>
-          {/* Spacer so badge doesn't overlap scaled logo */}
-          <div className="w-16 md:w-18 shrink-0" />
+          <button onClick={() => setSetupDismissed(true)}
+            className="shrink-0 text-teal-500 hover:text-white transition-colors text-xl leading-none ml-1">
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Nav */}
+      <nav className={`bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky z-10 ${showSetupBanner ? "top-[40px]" : "top-0"}`}>
+        <div className="flex items-center gap-4">
+          <Link href={isAuthenticated ? "/dashboard" : "/"} className="flex items-center shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.png" alt="SupplyLah"
+              className="h-10 md:h-12 w-auto scale-[2] md:scale-[2.5] origin-left object-contain" />
+          </Link>
+          <div className="w-16 md:w-20 shrink-0" />
           <span className="text-xs bg-teal-100 text-teal-700 px-3 py-1 rounded-full font-semibold whitespace-nowrap">
             Command Centre
           </span>
         </div>
 
-        {/* Right: alerts + refresh + profile */}
         <div className="flex items-center gap-3">
           {alertCount > 0 && (
-            <button
-              onClick={() => setActiveTab("command")}
-              className="flex items-center gap-1.5 text-sm text-red-600 font-semibold alert-pulse"
-            >
+            <button onClick={() => setActiveTab("command")}
+              className="flex items-center gap-1.5 text-sm text-red-600 font-semibold alert-pulse">
               🔴 {alertCount} alert{alertCount > 1 ? "s" : ""}
             </button>
           )}
           <span className="text-xs text-slate-400 hidden sm:block">
             {lastRefresh
               ? `Updated ${lastRefresh.toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
-              : "Updating..."}
+              : "Loading..."}
           </span>
-          <button
-            onClick={fetchData}
-            className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-medium transition-colors"
-          >
+          <button onClick={handleRefresh}
+            className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-medium transition-colors">
             ↻ Refresh
           </button>
-          <ProfileMenu profile={profile} onLogout={handleLogout} />
+          <ProfileMenu profile={profile} isAuthenticated={isAuthenticated} onLogout={handleLogout} />
         </div>
       </nav>
 
@@ -337,63 +455,62 @@ export default function Dashboard() {
           { id: "command", label: "🏗 Command Centre" },
           { id: "demo",    label: "💬 Demo Chat" },
         ].map(({ id, label }) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id as "command" | "demo")}
+          <button key={id} onClick={() => setActiveTab(id as "command" | "demo")}
             className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all ${
-              activeTab === id
-                ? "bg-teal-700 text-white shadow-sm"
-                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-            }`}
-          >
+              activeTab === id ? "bg-teal-700 text-white shadow-sm" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+            }`}>
             {label}
           </button>
         ))}
       </div>
 
-      <main className="px-6 py-4 space-y-4">
-        {activeTab === "command" && (
-          <>
-            {stats && (
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-                {[
-                  { label: "Today",     value: stats.total_today,           color: "text-slate-700" },
-                  { label: "Pending",   value: stats.pending,               color: "text-yellow-600" },
-                  { label: "Awaiting",  value: stats.awaiting_confirmation, color: "text-blue-600" },
-                  { label: "Confirmed", value: stats.confirmed,             color: "text-teal-600" },
-                  { label: "Dispatched",value: stats.dispatched,            color: "text-purple-600" },
-                  { label: "⚠ Review",  value: stats.requires_review,       color: "text-red-600" },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-                    <p className={`text-2xl font-black ${color}`}>{value}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{label}</p>
-                  </div>
-                ))}
+      {/* Skeleton while loading, then real content */}
+      {activeTab === "command" && loading ? (
+        <DashboardSkeleton />
+      ) : (
+        <main className="px-6 py-4 space-y-4">
+          {activeTab === "command" && (
+            <>
+              {stats && (
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+                  {[
+                    { label: "Today",     value: stats.total_today,           color: "text-slate-700" },
+                    { label: "Pending",   value: stats.pending,               color: "text-yellow-600" },
+                    { label: "Awaiting",  value: stats.awaiting_confirmation, color: "text-blue-600" },
+                    { label: "Confirmed", value: stats.confirmed,             color: "text-teal-600" },
+                    { label: "Dispatched",value: stats.dispatched,            color: "text-purple-600" },
+                    { label: "⚠ Review",  value: stats.requires_review,       color: "text-red-600" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} className="bg-white rounded-xl border border-slate-200 p-3 text-center">
+                      <p className={`text-2xl font-black ${color}`}>{value}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{label}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                <div className="lg:col-span-3">
+                  <KanbanBoard orders={orders} onRefresh={() => merchantId && fetchData(merchantId)} />
+                </div>
+                <div className="space-y-4">
+                  <AlertsPanel orders={orders} onRefresh={() => merchantId && fetchData(merchantId)} />
+                  <InventoryPanel inventory={inventory} />
+                </div>
               </div>
-            )}
+            </>
+          )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-              <div className="lg:col-span-3">
-                <KanbanBoard orders={orders} onRefresh={fetchData} />
+          {activeTab === "demo" && (
+            <div className="max-w-md mx-auto space-y-3">
+              <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 text-sm text-teal-700">
+                <strong>Demo Mode</strong> — This simulates a buyer sending WhatsApp messages.
+                Responses come from the real AI pipeline. Check the Command Centre tab to see orders appear live.
               </div>
-              <div className="space-y-4">
-                <AlertsPanel orders={orders} onRefresh={fetchData} />
-                <InventoryPanel inventory={inventory} />
-              </div>
+              <MockChat merchantId={merchantId ?? DEMO_MERCHANT_ID} />
             </div>
-          </>
-        )}
-
-        {activeTab === "demo" && (
-          <div className="max-w-md mx-auto space-y-3">
-            <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 text-sm text-teal-700">
-              <strong>Demo Mode</strong> — This simulates a buyer sending WhatsApp messages.
-              Responses come from the real AI pipeline. Check the Command Centre tab to see orders appear live.
-            </div>
-            <MockChat merchantId={merchantId} />
-          </div>
-        )}
-      </main>
+          )}
+        </main>
+      )}
     </div>
   );
 }
