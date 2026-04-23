@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 function SupplyLahLogo({ white = false }: { white?: boolean }) {
   return (
@@ -72,57 +72,161 @@ function Navbar() {
   );
 }
 
-/* ── WhatsApp mock chat ──────────────────────────── */
-function MockWhatsAppChat() {
-  const messages = [
-    { from: "buyer",  text: "boss nk order 5 botol minyak masak 5L n 2 beg beras, hantar kat SS2 PJ yer",  delay: "0ms" },
-    { from: "ai",    text: "✅ Order diterima! Sedang semak stok…",                                         delay: "400ms" },
-    { from: "ai",    text: "📦 Minyak Masak 5L x5 — RM129.50\n🍚 Beras Tempatan 10kg x2 — RM80.00\n🚚 Penghantaran: RM15.00\n💰 *Jumlah: RM224.50*\n\nBalas *YA* untuk sahkan!", delay: "800ms" },
-    { from: "buyer", text: "YA",                                                                             delay: "1200ms" },
-    { from: "ai",    text: "🎉 Pesanan disahkan! Lalamove dalam perjalanan. ETA 45 minit.",                  delay: "1600ms" },
-  ];
+/* ── Animated phone + WhatsApp chat ─────────────── */
+const CHAT_SCRIPT = [
+  { from: "buyer", text: "boss nk order 5 botol minyak masak 5L n 2 beg beras, hantar kat SS2 PJ yer" },
+  { from: "ai",    text: "Ok tunggu sekejap! 🙏 Saya tengah proses pesanan ni..." },
+  { from: "ai",    text: "📦 Minyak Masak 5L ×5 — RM129.50\n🍚 Beras 10kg ×2 — RM80.00\n🚚 Penghantaran: RM15.00\n💰 *Jumlah: RM224.50*\n\nBalas *YA* untuk sahkan!" },
+  { from: "buyer", text: "YA" },
+  { from: "ai",    text: "🎉 Pesanan disahkan!\n🚚 Lalamove dalam perjalanan.\n⏱️ ETA ~45 minit" },
+] as const;
+
+function PhoneWithChat({ onStep }: { onStep?: (s: number) => void } = {}) {
+  const [shown, setShown] = useState<number>(0);
+  const [typing, setTyping] = useState(false);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const schedule = (fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms);
+      timers.current.push(t);
+    };
+
+    const run = () => {
+      timers.current.forEach(clearTimeout);
+      timers.current = [];
+      setShown(0);
+      setTyping(false);
+      onStep?.(0);
+
+      let t = 600;
+      CHAT_SCRIPT.forEach((msg, i) => {
+        if (msg.from === "ai") {
+          schedule(() => setTyping(true), t);
+          t += 1300;
+          schedule(() => { setTyping(false); setShown(i + 1); onStep?.(i + 1); }, t);
+        } else {
+          schedule(() => { setShown(i + 1); onStep?.(i + 1); }, t);
+        }
+        t += i === CHAT_SCRIPT.length - 1 ? 200 : 1600;
+      });
+      schedule(run, t + 3200);
+    };
+
+    run();
+    return () => timers.current.forEach(clearTimeout);
+  }, []);
+
+  useEffect(() => {
+    // Scroll only within the phone's message container — never the page
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [shown, typing]);
+
+  const visible = CHAT_SCRIPT.slice(0, shown);
 
   return (
-    <div className="bg-[#0b5454] rounded-2xl shadow-2xl overflow-hidden w-full max-w-sm">
-      {/* Chat header */}
-      <div className="bg-teal-800 px-4 py-3 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-teal-400 flex items-center justify-center text-white text-xs font-bold">SL</div>
-        <div>
-          <p className="text-white text-sm font-semibold">SupplyLah AI</p>
-          <p className="text-teal-300 text-xs">● Online</p>
+    /* Phone shell */
+    <div className="relative bg-slate-900 rounded-[2.6rem] pt-[16px] px-[9px] pb-[9px] shadow-[0_30px_80px_rgba(0,0,0,0.45)] w-[262px] select-none mt-4">
+      {/* Left buttons */}
+      <div className="absolute -left-[3px] top-[78px]  w-[3px] h-7  bg-slate-700 rounded-l-sm" />
+      <div className="absolute -left-[3px] top-[116px] w-[3px] h-10 bg-slate-700 rounded-l-sm" />
+      <div className="absolute -left-[3px] top-[162px] w-[3px] h-10 bg-slate-700 rounded-l-sm" />
+      {/* Right button */}
+      <div className="absolute -right-[3px] top-[108px] w-[3px] h-14 bg-slate-700 rounded-r-sm" />
+
+      {/* Screen */}
+      <div className="bg-[#ece5dd] rounded-[2.1rem] overflow-hidden h-[530px] flex flex-col">
+
+        {/* Dynamic Island / notch */}
+        <div className="bg-slate-900 flex justify-center pt-2 pb-1.5 shrink-0">
+          <div className="w-[88px] h-[22px] bg-black rounded-full" />
         </div>
-      </div>
-      {/* Messages */}
-      <div className="bg-[#e5ddd5] p-3 space-y-2 min-h-[220px]">
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`flex ${m.from === "buyer" ? "justify-end" : "justify-start"} animate-slide-up`}
-            style={{ animationDelay: m.delay, animationFillMode: "both" }}
-          >
-            <div
-              className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed whitespace-pre-line shadow-sm
-                ${m.from === "buyer"
-                  ? "bg-[#dcf8c6] text-slate-800 rounded-br-sm"
-                  : "bg-white text-slate-800 rounded-bl-sm"
-                }`}
-            >
-              {m.text}
-            </div>
+
+        {/* WhatsApp header */}
+        <div className="bg-[#075e54] px-3 py-2 flex items-center gap-2 shrink-0">
+          <div className="w-[30px] h-[30px] rounded-full bg-[#25d366] flex items-center justify-center text-white font-bold text-[10px] shrink-0">SL</div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-[11px] font-semibold leading-tight">SupplyLah AI</p>
+            <p className="text-green-200 text-[9px]">● online</p>
           </div>
-        ))}
+          <div className="flex gap-3 text-white text-[13px] shrink-0">
+            <span>📞</span><span>⋮</span>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5 flex flex-col">
+          <div className="flex-1" />
+          {visible.map((m, i) => (
+            <div key={i} className={`flex ${m.from === "buyer" ? "justify-end" : "justify-start"} animate-fade-in`}>
+              <div className={`max-w-[84%] px-2.5 py-[6px] rounded-[14px] text-[10px] leading-relaxed whitespace-pre-line shadow-sm
+                ${m.from === "buyer"
+                  ? "bg-[#dcf8c6] text-slate-800 rounded-tr-[3px]"
+                  : "bg-white       text-slate-800 rounded-tl-[3px]"
+                }`}>
+                {m.text}
+                <span className="block text-right text-[8px] text-slate-400 mt-0.5 -mb-0.5">
+                  {new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+            </div>
+          ))}
+
+          {/* Typing indicator */}
+          {typing && (
+            <div className="flex justify-start animate-fade-in">
+              <div className="bg-white px-3 py-2.5 rounded-[14px] rounded-tl-[3px] shadow-sm flex gap-1 items-center">
+                {[0, 150, 300].map(d => (
+                  <div key={d} className="w-[5px] h-[5px] bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input bar */}
+        <div className="bg-[#f0f0f0] px-2 py-1.5 flex items-center gap-1.5 shrink-0">
+          <div className="flex-1 bg-white rounded-full px-3 py-1 text-[9px] text-slate-400 leading-tight">Type a message</div>
+          <div className="w-[28px] h-[28px] rounded-full bg-[#25d366] flex items-center justify-center text-white text-[11px] shrink-0">➤</div>
+        </div>
+
       </div>
+    </div>
+  );
+}
+
+/* ── USP floating badge ───────────────────────────── */
+function UspBadge({ show, icon, text, className }: {
+  show: boolean; icon: string; text: string; className?: string;
+}) {
+  return (
+    <div className={`
+      absolute hidden lg:flex items-center gap-2 z-20
+      bg-white/95 backdrop-blur-sm rounded-2xl px-3 py-2.5
+      shadow-[0_4px_24px_rgba(0,0,0,0.13)] border border-slate-100
+      text-[11px] font-semibold text-slate-700 whitespace-nowrap
+      transition-all duration-500 ease-out
+      ${show ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-4 scale-95 pointer-events-none"}
+      ${className}
+    `}>
+      <span className="text-[15px]">{icon}</span>
+      <span>{text}</span>
     </div>
   );
 }
 
 /* ── Hero ─────────────────────────────────────────── */
 function Hero() {
+  const [step, setStep] = useState(0);
+
   return (
     <section className="hero-gradient pt-22 pb-24 px-6 overflow-hidden">
       <div className="max-w-6xl mx-auto grid lg:grid-cols-2 gap-16 items-center">
         {/* Text */}
-        <div className="animate-fade-in space-y-4">
+        <div className="animate-fade-in space-y-4 pt-8 lg:pt-14">
           <span className="section-tag mb-2">AI-Powered Wholesale</span>
           <h1 className="text-4xl sm:text-5xl lg:text-5xl font-black text-teal-900 leading-snug mb-6">
             Turn WhatsApp <br />
@@ -144,29 +248,38 @@ function Hero() {
           </div>
         </div>
 
-        {/* Right: mascot + chat bubble */}
-        <div className="flex flex-col items-center gap-6 animate-slide-in-right">
-          {/* Mascot image — save your mascot PNG as public/mascot-hero.png */}
-          <div className="relative">
-            <div className="w-40 h-40 sm:w-52 sm:h-52 rounded-3xl bg-teal-100 flex items-center justify-center overflow-hidden animate-float">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/mascot-hero.png"
-                alt="SupplyLah mascot"
-                className="w-full h-full object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                  (e.target as HTMLImageElement).parentElement!.innerHTML +=
-                    `<span class="text-7xl">🦦</span>`;
-                }}
-              />
-            </div>
-            {/* Floating badge */}
-            <div className="absolute -top-3 -right-4 bg-white border border-teal-200 rounded-full px-3 py-1 shadow-md text-xs font-bold text-teal-700 whitespace-nowrap">
-              ⚡ &lt;90s per order
-            </div>
+        {/* Right: phone + mascot + floating USP badges */}
+        <div className="flex justify-center lg:justify-end animate-slide-in-right">
+          {/* Outer wrapper reserves horizontal space for left badges + phone + mascot */}
+          {/* paddingLeft small so wrapper stays in right column; left badges use negative offsets */}
+          <div className="relative" style={{ paddingLeft: "10px", paddingRight: "180px" }}>
+
+            {/* ── Left USP badges — float left of phone using negative offset ── */}
+            <UspBadge show={step >= 1} icon="🗣️" text="Bahasa Rojak ready" className="top-[80px]  -left-[130px]" />
+            <UspBadge show={step >= 3} icon="📦" text="Auto stock check"   className="top-[270px] -left-[125px]" />
+
+            {/* ── Phone ── */}
+            <PhoneWithChat onStep={setStep} />
+
+            {/* ── Right USP badges — pulled left, close to phone ── */}
+            <UspBadge show={step >= 2} icon="⚡" text="Balas &lt; 2 saat"    className="top-[50px]  right-[55px]" />
+            <UspBadge show={step >= 5} icon="🚚" text="Auto delivery booked" className="top-[200px] right-[45px]" />
+
+            {/* ── Mascot — bigger, close overlap on right edge of phone ── */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/mascot-hero.png"
+              alt="SupplyLah mascot"
+              className="absolute bottom-0 right-[-20px] w-72 h-72 object-contain animate-float z-10 drop-shadow-2xl pointer-events-none"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+                const span = document.createElement("span");
+                span.className = "absolute bottom-0 right-4 text-8xl animate-float z-10";
+                span.textContent = "🦦";
+                (e.target as HTMLImageElement).parentElement!.appendChild(span);
+              }}
+            />
           </div>
-          <MockWhatsAppChat />
         </div>
       </div>
     </section>
