@@ -39,6 +39,9 @@ export interface Product {
   product_sku: string | null;
   unit_price: number;
   stock_quantity: number;
+  unit?: string | null;
+  reorder_threshold?: number | null;
+  available_quantity?: string | null; // Used in UI mapping
 }
 
 export interface DashboardStats {

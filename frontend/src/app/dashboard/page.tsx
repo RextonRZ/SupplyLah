@@ -81,10 +81,11 @@ function PromoModal({ feature, onClose }: { feature: string; onClose: () => void
 }
 
 /* ── Profile dropdown ── */
-function ProfileMenu({ profile, isAuthenticated, onLogout }: {
+function ProfileMenu({ profile, isAuthenticated, onLogout, onSelectTab }: {
   profile: UserProfile;
   isAuthenticated: boolean;
   onLogout: () => void;
+  onSelectTab: (tabId: "settings" | "team" | "inventory") => void;
 }) {
   const [open, setOpen] = useState(false);
   const [promo, setPromo] = useState<string | null>(null);
@@ -98,17 +99,17 @@ function ProfileMenu({ profile, isAuthenticated, onLogout }: {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  function menuItem(icon: string, label: string, href: string, promoKey: string) {
+  function menuItem(icon: string, label: string, tabId: "settings" | "team" | "inventory") {
     if (isAuthenticated) {
       return (
-        <Link href={href} onClick={() => setOpen(false)}
-          className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+        <button onClick={() => { setOpen(false); onSelectTab(tabId); }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
           <span className="text-base">{icon}</span> {label}
-        </Link>
+        </button>
       );
     }
     return (
-      <button onClick={() => { setOpen(false); setPromo(promoKey); }}
+      <button onClick={() => { setOpen(false); setPromo(tabId); }}
         className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors">
         <span className="text-base">{icon}</span>
         <span>{label}</span>
@@ -169,9 +170,9 @@ function ProfileMenu({ profile, isAuthenticated, onLogout }: {
 
             {/* Menu items */}
             <div className="py-1.5">
-              {menuItem("⚙️", "Store Settings",   "/get-started", "settings")}
-              {menuItem("👥", "Team Members",      "/get-started", "team")}
-              {menuItem("📦", "Manage Inventory",  "/get-started", "inventory")}
+              {menuItem("⚙️", "Store Settings",   "settings")}
+              {menuItem("👥", "Team Members",      "team")}
+              {menuItem("📦", "Manage Inventory",  "inventory")}
             </div>
 
             {/* Footer */}
@@ -198,6 +199,505 @@ function ProfileMenu({ profile, isAuthenticated, onLogout }: {
 /* ── Skeleton components ── */
 function Sk({ className }: { className?: string }) {
   return <div className={`skeleton ${className ?? ""}`} />;
+}
+
+/* ── Team Tab ── */
+function TabSkeleton({ rows = 4, cols = 4 }: { rows?: number; cols?: number }) {
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="flex justify-between items-center">
+        <Sk className="h-6 w-44 rounded-lg" />
+        <Sk className="h-9 w-32 rounded-xl" />
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="bg-slate-50 border-b border-slate-200 px-6 py-3 flex gap-6">
+          {Array.from({ length: cols }).map((_, i) => (
+            <Sk key={i} className="h-3 w-20 rounded-md" />
+          ))}
+        </div>
+        <div className="divide-y divide-slate-100">
+          {Array.from({ length: rows }).map((_, i) => (
+            <div key={i} className="px-6 py-4 flex gap-6 items-center">
+              {Array.from({ length: cols }).map((_, j) => (
+                <Sk key={j} className={`h-4 rounded-md ${j === 1 ? "w-40" : "w-24"}`} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamAdminTab({ merchantId }: { merchantId: string }) {
+  const [team, setTeam] = useState<any[]>([]);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [role, setRole] = useState("Warehouse Manager");
+  const [loading, setLoading] = useState(true);
+
+  async function fetchTeam() {
+    setLoading(true);
+    const { data } = await supabase.from("merchant_users").select("*").eq("merchant_id", merchantId);
+    setTeam(data || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    fetchTeam();
+  }, [merchantId]);
+
+  async function invite() {
+    if (!email || !phone) return;
+    await supabase.from("merchant_users").insert({ merchant_id: merchantId, invited_email: email, contact_number: phone, role, status: "invited" });
+    setEmail("");
+    setPhone("");
+    fetchTeam();
+  }
+
+  if (loading) return <TabSkeleton rows={3} cols={5} />;
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="bg-white p-6 rounded-2xl border border-slate-200">
+        <h2 className="text-lg font-bold text-slate-900 mb-4">Invite Team Member</h2>
+        <div className="flex gap-3">
+          <input type="email" placeholder="Email address" value={email} onChange={e => setEmail(e.target.value)}
+            className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500" />
+          <input type="tel" placeholder="Contact number" value={phone} onChange={e => setPhone(e.target.value)}
+            className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500" />
+          <select value={role} onChange={e => setRole(e.target.value)}
+            className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500">
+            <option>Warehouse Manager</option>
+            <option>Wholesale Supplier</option>
+          </select>
+          <button onClick={invite} disabled={!email || !phone} className="btn-primary px-6 py-2.5 font-bold whitespace-nowrap disabled:opacity-50">
+            Invite →
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wider">
+            <tr><th className="px-6 py-3">User</th><th className="px-6 py-3">Contact</th><th className="px-6 py-3">Role</th><th className="px-6 py-3">Status</th><th className="px-6 py-3"></th></tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {team.map(m => (
+              <tr key={m.id} className="hover:bg-slate-50">
+                <td className="px-6 py-4 font-medium text-slate-900">{m.invited_email}</td>
+                <td className="px-6 py-4 text-slate-500">{m.contact_number || "—"}</td>
+                <td className="px-6 py-4 text-slate-500">{m.role}</td>
+                <td className="px-6 py-4">
+                  <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600">{m.status}</span>
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <button onClick={async () => { await supabase.from("merchant_users").delete().eq("id", m.id); fetchTeam(); }}
+                    className="text-red-500 hover:text-red-700 text-xs font-bold">Remove</button>
+                </td>
+              </tr>
+            ))}
+            {team.length === 0 && !loading && <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No team members yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── Rules Tab ── */
+type Rules = {
+  minOrderValue: string;
+  allowDiscount: boolean;
+  substitutions: { [productId: string]: { substitute_id: string; discount: string } };
+  chargeDelivery: boolean;
+  deliveryFee: string;
+};
+
+const defaultRules: Rules = {
+  minOrderValue: "50",
+  allowDiscount: true,
+  substitutions: {},
+  chargeDelivery: true,
+  deliveryFee: "15"
+};
+
+function Toggle({ on, onChange, label, desc }: { on: boolean; onChange: (v: boolean) => void; label: string; desc: string }) {
+  return (
+    <div className="flex items-start justify-between gap-6 py-5">
+      <div>
+        <p className="text-sm font-semibold text-slate-800">{label}</p>
+        <p className="text-xs text-slate-500 mt-0.5 leading-relaxed max-w-sm">{desc}</p>
+      </div>
+      <button type="button" onClick={() => onChange(!on)}
+        className={`relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none mt-0.5 ${on ? "bg-teal-500" : "bg-slate-200"}`}>
+        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${on ? "translate-x-5" : "translate-x-0"}`} />
+      </button>
+    </div>
+  );
+}
+
+function RulesAdminTab({ merchantId, products, inventoryLoading }: { merchantId: string, products: Product[], inventoryLoading: boolean }) {
+  const [rules, setRules] = useState<Rules>(defaultRules);
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("knowledge_base").select("content").eq("merchant_id", merchantId).eq("document_type", "business_rules_json").maybeSingle();
+      if (data && data.content) {
+        try {
+          const parsed = JSON.parse(data.content);
+          setRules({ ...defaultRules, ...parsed });
+        } catch (e) {}
+      }
+      setLoading(false);
+    })();
+  }, [merchantId]);
+
+  function set<K extends keyof Rules>(k: K, v: Rules[K]) { setRules({ ...rules, [k]: v }); }
+  
+  function updateSub(productId: string, field: "substitute_id" | "discount", value: string) {
+    const existing = rules.substitutions[productId] || { substitute_id: "N/A", discount: "" };
+    set("substitutions", {
+      ...rules.substitutions,
+      [productId]: {
+        ...existing,
+        [field]: value
+      }
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    const { error: kbJsonError } = await supabase.from("knowledge_base").upsert({
+      merchant_id: merchantId,
+      document_type: "business_rules_json",
+      content: JSON.stringify(rules)
+    }, { onConflict: "merchant_id,document_type" });
+    if (kbJsonError) { setSaving(false); return; }
+
+    const subRules = Object.entries(rules.substitutions)
+      .filter(([_, sub]) => sub.substitute_id && sub.substitute_id !== "N/A")
+      .map(([prodId, sub]) => {
+        const original = products.find(p => p.product_id === prodId)?.product_name || prodId;
+        const substitute = products.find(p => p.product_id === sub.substitute_id)?.product_name || sub.substitute_id;
+        return `- If "${original}" is out of stock, offer "${substitute}" as a substitute at a ${sub.discount || 0}% discount.`;
+      }).join("\n");
+
+    const rulesText = [
+      `Minimum order value: RM${rules.minOrderValue}.`,
+      rules.allowDiscount ? `Substitutions allowed:\n${subRules}` : "Do not offer discounts for substitutes.",
+      rules.chargeDelivery ? `Charge delivery fee. Flat rate: RM${rules.deliveryFee || "0 (use live Lalamove price)"}.` : "Delivery fee absorbed by merchant.",
+    ].join("\n\n");
+
+    const { error: kbTextError } = await supabase.from("knowledge_base").upsert({
+      merchant_id: merchantId,
+      document_type: "business_rules",
+      content: rulesText
+    }, { onConflict: "merchant_id,document_type" });
+    if (kbTextError) { setSaving(false); return; }
+    setSaving(false);
+  }
+
+  if (loading || inventoryLoading) return <TabSkeleton rows={5} cols={3} />;
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="flex justify-between items-center mb-2">
+        <h2 className="text-xl font-bold text-slate-900">Manage Business Rules</h2>
+        <button onClick={save} disabled={saving} className="btn-primary px-6 py-2.5 font-bold w-32 justify-center">
+          {saving ? "Saving..." : "Save Rules"}
+        </button>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl border border-slate-200">
+        <p className="text-sm text-slate-500 mb-4">These rules are applied to every order quote automatically by the AI.</p>
+
+        <div className="py-5 border-b border-slate-100">
+          <p className="text-sm font-semibold text-slate-800 mb-0.5">Minimum order value</p>
+          <p className="text-xs text-slate-500 mb-3">Orders below this amount will be politely declined.</p>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-400">RM</span>
+            <input type="number" min="0" value={rules.minOrderValue} onChange={(e) => set("minOrderValue", e.target.value)}
+              placeholder="50"
+              className="w-28 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300" />
+          </div>
+        </div>
+
+        <div className="border-b border-slate-100 pb-5">
+          <Toggle on={rules.allowDiscount} onChange={(v) => set("allowDiscount", v)}
+            label="Allow substitution discount"
+            desc="When an item is out of stock, offer an alternative at a slight discount rather than rejecting the order." />
+          {rules.allowDiscount && products.length > 0 && (
+            <div className="mt-2 text-sm">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500 tracking-wider">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold rounded-tl-lg">Product</th>
+                    <th className="px-4 py-3 font-semibold">Substitute Product</th>
+                    <th className="px-4 py-3 font-semibold rounded-tr-lg">Discount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {products.map((p) => {
+                    // Rules saved from get-started use user-entered SKU as key (e.g. "PROD-001"),
+                    // rules saved from dashboard use the DB UUID. Try both.
+                    const sub = rules.substitutions[p.product_id]
+                      || rules.substitutions[p.product_sku || ""]
+                      || { substitute_id: "N/A", discount: "" };
+
+                    // substitute_id may also be a SKU — resolve to DB UUID for the select
+                    const resolvedSubId = (!sub.substitute_id || sub.substitute_id === "N/A")
+                      ? "N/A"
+                      : (products.find(p2 => p2.product_id === sub.substitute_id)?.product_id
+                         || products.find(p2 => p2.product_sku === sub.substitute_id)?.product_id
+                         || "N/A");
+                    const isNA = resolvedSubId === "N/A";
+                    return (
+                      <tr key={p.product_id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-medium text-slate-900">
+                          {p.product_name}
+                          <div className="text-xs text-slate-400 font-normal mt-0.5">{p.product_sku || p.product_id.split("-")[0]}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <select value={resolvedSubId} onChange={(e) => {
+                              const val = e.target.value;
+                              updateSub(p.product_id, "substitute_id", val);
+                              if (val === "N/A") updateSub(p.product_id, "discount", "");
+                            }}
+                            className="w-full max-w-[200px] px-2 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-teal-500">
+                            <option value="N/A">N/A</option>
+                            {products.filter(opt => opt.product_id !== p.product_id).map(opt => (
+                                <option key={opt.product_id} value={opt.product_id}>{opt.product_name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-4 py-3">
+                          {isNA ? <span className="text-slate-400 text-xs italic">N/A</span> : (
+                            <div className="flex items-center gap-1">
+                              <input type="number" min="0" max="100" value={sub.discount || ""} onChange={(e) => updateSub(p.product_id, "discount", e.target.value)}
+                                className="w-16 px-2 py-1.5 rounded-lg border border-slate-200 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500" placeholder="10" />
+                              <span className="text-xs text-slate-500">%</span>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {rules.allowDiscount && products.length === 0 && (
+             <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mt-2 border border-amber-200 inline-block">
+               Add products in the Inventory tab to configure substitutions with discounts.
+             </p>
+          )}
+        </div>
+
+        <div>
+          <Toggle on={rules.chargeDelivery} onChange={(v) => set("chargeDelivery", v)}
+            label="Pass delivery fee to customer"
+            desc="Include the Lalamove delivery charge in the order total sent to the buyer." />
+          {rules.chargeDelivery && (
+            <div className="pb-4 flex items-center gap-3">
+              <span className="text-sm text-slate-600">Flat rate</span>
+              <span className="text-sm font-semibold text-slate-400">RM</span>
+              <input type="number" min="0" value={rules.deliveryFee} onChange={(e) => set("deliveryFee", e.target.value)}
+                className="w-20 px-3 py-2 rounded-lg border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent" />
+              <span className="text-xs text-slate-400">Leave 0 to use live Lalamove pricing</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Inventory Tab ── */
+type EditRow = { product_name: string; product_sku: string; unit: string; stock_quantity: string; reorder_threshold: string; unit_price: string };
+
+function InventoryAdminTab({ merchantId, inventory, onRefresh, inventoryLoading }: { merchantId: string, inventory: Product[], onRefresh: () => void, inventoryLoading: boolean }) {
+  const [adding, setAdding] = useState(false);
+  const [newRow, setNewRow] = useState({ product_id: "", product_name: "", unit: "", available_quantity: "", reorder_threshold: "", unit_price: "" });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editRow, setEditRow] = useState<EditRow>({ product_name: "", product_sku: "", unit: "", stock_quantity: "", reorder_threshold: "", unit_price: "" });
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Clear refreshing as soon as the parent pushes down fresh inventory data
+  useEffect(() => { setRefreshing(false); }, [inventory]);
+
+  async function add() {
+    if (!newRow.product_name || !newRow.unit_price) return;
+    setSaving(true);
+    await supabase.from("product").insert({
+      merchant_id: merchantId,
+      product_name: newRow.product_name,
+      product_sku: newRow.product_id || null,
+      unit_price: parseFloat(newRow.unit_price),
+      stock_quantity: parseInt(newRow.available_quantity) || 0,
+      unit: newRow.unit || null,
+      reorder_threshold: parseInt(newRow.reorder_threshold) || 0
+    });
+    setSaving(false);
+    setNewRow({ product_id: "", product_name: "", unit: "", available_quantity: "", reorder_threshold: "", unit_price: "" });
+    setAdding(false);
+    setRefreshing(true);
+    onRefresh();
+  }
+
+  function startEdit(p: Product) {
+    setEditingId(p.product_id);
+    setEditRow({
+      product_name: p.product_name,
+      product_sku: p.product_sku || "",
+      unit: p.unit || "",
+      stock_quantity: String(p.stock_quantity ?? ""),
+      reorder_threshold: String(p.reorder_threshold ?? ""),
+      unit_price: String(p.unit_price),
+    });
+  }
+
+  async function saveEdit(productId: string) {
+    if (!editRow.product_name || !editRow.unit_price) return;
+    setSaving(true);
+    await supabase.from("product").update({
+      product_name: editRow.product_name,
+      product_sku: editRow.product_sku || null,
+      unit: editRow.unit || null,
+      stock_quantity: parseInt(editRow.stock_quantity) || 0,
+      reorder_threshold: parseInt(editRow.reorder_threshold) || 0,
+      unit_price: parseFloat(editRow.unit_price),
+    }).eq("product_id", productId);
+    setSaving(false);
+    setEditingId(null);
+    setRefreshing(true);
+    onRefresh();
+  }
+
+  const INPUT = `w-full px-2 py-1.5 bg-white border border-teal-300 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500`;
+  const INPUT_ADD = `w-full px-3 py-2 bg-slate-50 border border-slate-200 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300`;
+
+  if (inventoryLoading || refreshing) return <TabSkeleton rows={6} cols={7} />;
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-between items-end">
+        <h2 className="text-xl font-bold text-slate-900">Manage Inventory</h2>
+        <button onClick={() => { setAdding(!adding); setEditingId(null); }} className="btn-primary px-5 py-2 text-sm font-bold">
+          {adding ? "Cancel" : "+ Add new product"}
+        </button>
+      </div>
+
+      {adding && (
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
+          <div className="grid grid-cols-4 gap-2 items-end">
+            {([
+              { key: "product_id",         label: "ID",              col: "",           type: "text" },
+              { key: "product_name",       label: "Name *",          col: "col-span-2", type: "text" },
+              { key: "unit",               label: "Unit",            col: "",           type: "text" },
+              { key: "available_quantity", label: "Available Qty",   col: "",           type: "number" },
+              { key: "reorder_threshold",  label: "Reorder Threshold", col: "",         type: "number" },
+              { key: "unit_price",         label: "Price (RM) *",    col: "",           type: "number" },
+            ] as const).map(({ key, label, col, type }) => (
+              <div key={key} className={col}>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">{label}</label>
+                <input type={type} value={(newRow as Record<string, string>)[key]}
+                  onChange={(e) => setNewRow({ ...newRow, [key]: e.target.value })}
+                  className={INPUT_ADD} />
+              </div>
+            ))}
+          </div>
+          <button onClick={add} disabled={!newRow.product_name || !newRow.unit_price}
+            className="btn-primary px-5 py-2.5 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+            Save
+          </button>
+        </div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm text-left">
+          <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wider">
+            <tr>
+              <th className="px-5 py-3">ID</th>
+              <th className="px-5 py-3">Product</th>
+              <th className="px-5 py-3">Unit</th>
+              <th className="px-5 py-3">Avail Qty</th>
+              <th className="px-5 py-3">Reorder</th>
+              <th className="px-5 py-3">Price (RM)</th>
+              <th className="px-5 py-3"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {inventory.map(p => {
+              const isEditing = editingId === p.product_id;
+              return (
+                <tr key={p.product_id} className={isEditing ? "bg-teal-50" : "hover:bg-slate-50"}>
+                  <td className="px-5 py-3 text-slate-400 text-xs">
+                    {isEditing
+                      ? <input value={editRow.product_sku} onChange={e => setEditRow({ ...editRow, product_sku: e.target.value })} className={INPUT} placeholder="SKU" />
+                      : (p.product_sku || p.product_id.split("-")[0])}
+                  </td>
+                  <td className="px-5 py-3 font-semibold text-slate-900">
+                    {isEditing
+                      ? <input value={editRow.product_name} onChange={e => setEditRow({ ...editRow, product_name: e.target.value })} className={INPUT} />
+                      : p.product_name}
+                  </td>
+                  <td className="px-5 py-3 text-slate-500">
+                    {isEditing
+                      ? <input value={editRow.unit} onChange={e => setEditRow({ ...editRow, unit: e.target.value })} className={INPUT} placeholder="e.g. kg" />
+                      : (p.unit || "—")}
+                  </td>
+                  <td className="px-5 py-3 text-slate-700">
+                    {isEditing
+                      ? <input type="number" value={editRow.stock_quantity} onChange={e => setEditRow({ ...editRow, stock_quantity: e.target.value })} className={INPUT} />
+                      : (p.stock_quantity ?? "—")}
+                  </td>
+                  <td className="px-5 py-3 text-slate-500">
+                    {isEditing
+                      ? <input type="number" value={editRow.reorder_threshold} onChange={e => setEditRow({ ...editRow, reorder_threshold: e.target.value })} className={INPUT} />
+                      : (p.reorder_threshold ?? "—")}
+                  </td>
+                  <td className="px-5 py-3 text-slate-700">
+                    {isEditing
+                      ? <input type="number" value={editRow.unit_price} onChange={e => setEditRow({ ...editRow, unit_price: e.target.value })} className={INPUT} />
+                      : `RM ${p.unit_price}`}
+                  </td>
+                  <td className="px-5 py-3 text-right whitespace-nowrap">
+                    {isEditing ? (
+                      <div className="flex items-center justify-end gap-3">
+                        <button onClick={() => saveEdit(p.product_id)} disabled={saving || !editRow.product_name || !editRow.unit_price}
+                          className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-40 transition-colors">
+                          {saving ? "Saving…" : "Save"}
+                        </button>
+                        <button onClick={() => setEditingId(null)}
+                          className="text-slate-400 hover:text-slate-600 text-xs font-bold transition-colors">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-end gap-3">
+                        <button onClick={() => { setAdding(false); startEdit(p); }}
+                          className="text-teal-500 hover:text-teal-700 text-xs font-bold transition-colors">
+                          Edit
+                        </button>
+                        <button onClick={async () => { await supabase.from("product").delete().eq("product_id", p.product_id); onRefresh(); }}
+                          className="text-slate-400 hover:text-red-500 text-xs font-bold transition-colors">
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 function DashboardSkeleton() {
@@ -277,7 +777,7 @@ export default function Dashboard() {
   const [orders, setOrders]     = useState<Order[]>([]);
   const [inventory, setInventory] = useState<Product[]>([]);
   const [stats, setStats]       = useState<DashboardStats | null>(null);
-  const [activeTab, setActiveTab] = useState<"command" | "demo">("command");
+  const [activeTab, setActiveTab] = useState<"command" | "demo" | "inventory" | "team" | "settings">("command");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading]   = useState(true); // skeleton until first fetch done
 
@@ -423,7 +923,7 @@ export default function Dashboard() {
             <img src="/logo.png" alt="SupplyLah"
               className="h-10 md:h-12 w-auto scale-[2] md:scale-[2.5] origin-left object-contain" />
           </Link>
-          <div className="w-16 md:w-20 shrink-0" />
+          <div className="w-16 md:w-16 shrink-0" />
           <span className="text-xs bg-teal-100 text-teal-700 px-3 py-1 rounded-full font-semibold whitespace-nowrap">
             Command Centre
           </span>
@@ -445,18 +945,21 @@ export default function Dashboard() {
             className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg font-medium transition-colors">
             ↻ Refresh
           </button>
-          <ProfileMenu profile={profile} isAuthenticated={isAuthenticated} onLogout={handleLogout} />
+          <ProfileMenu profile={profile} isAuthenticated={isAuthenticated} onLogout={handleLogout} onSelectTab={(t) => setActiveTab(t)} />
         </div>
       </nav>
 
       {/* Tabs */}
-      <div className="px-6 pt-4 flex gap-2">
+      <div className="px-6 pt-4 flex gap-2 overflow-x-auto pb-2">
         {[
-          { id: "command", label: "🏗 Command Centre" },
-          { id: "demo",    label: "💬 Demo Chat" },
+          { id: "command",   label: "🏗 Command Centre" },
+          { id: "inventory", label: "📦 Inventory" },
+          { id: "team",      label: "👥 Team" },
+          { id: "settings",  label: "⚙️ Settings" },
+          { id: "demo",      label: "💬 Demo Chat" },
         ].map(({ id, label }) => (
-          <button key={id} onClick={() => setActiveTab(id as "command" | "demo")}
-            className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all ${
+          <button key={id} onClick={() => setActiveTab(id as any)}
+            className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
               activeTab === id ? "bg-teal-700 text-white shadow-sm" : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
             }`}>
             {label}
@@ -498,6 +1001,18 @@ export default function Dashboard() {
                 </div>
               </div>
             </>
+          )}
+
+          {activeTab === "inventory" && merchantId && (
+            <InventoryAdminTab merchantId={merchantId} inventory={inventory} onRefresh={() => fetchData(merchantId)} inventoryLoading={loading} />
+          )}
+
+          {activeTab === "team" && merchantId && (
+            <TeamAdminTab merchantId={merchantId} />
+          )}
+
+          {activeTab === "settings" && merchantId && (
+            <RulesAdminTab merchantId={merchantId} products={inventory} inventoryLoading={loading} />
           )}
 
           {activeTab === "demo" && (

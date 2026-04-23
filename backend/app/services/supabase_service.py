@@ -237,7 +237,7 @@ async def get_inventory(merchant_id: str) -> list[dict]:
     result = (
         get_supabase()
         .table("product")
-        .select("product_id, product_name, product_sku, stock_quantity, unit_price")
+        .select("product_id, product_name, product_sku, stock_quantity, unit_price, unit, reorder_threshold")
         .eq("merchant_id", merchant_id)
         .order("product_name")
         .execute()
