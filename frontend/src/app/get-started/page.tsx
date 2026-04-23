@@ -525,10 +525,18 @@ export default function GetStartedPage() {
               const done    = i < step && stepHasData[i];
               const incomplete = i < step && warnedEmpty.has(i) && !stepHasData[i];
               const current = i === step;
+              // Only allow clicking steps the user has already visited
+              const isClickable = i < step || i === step;
               return (
                 <div key={i} className={`flex items-start gap-3 px-3 py-3 rounded-xl transition-colors ${
-                  current ? "bg-white shadow-sm border border-slate-200" : "hover:bg-white"
-                }`}>
+                  current ? "bg-white shadow-sm border border-slate-200" : isClickable ? "hover:bg-white cursor-pointer" : "opacity-60 cursor-not-allowed"
+                }`}
+                onClick={() => {
+                  if (isClickable) {
+                    setStep(i);
+                    setShowEmptyWarning(false);
+                  }
+                }}>
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black shrink-0 mt-0.5 transition-all ${
                     done       ? "bg-teal-500 text-white"
                   : incomplete ? "bg-amber-400 text-white"
@@ -543,10 +551,9 @@ export default function GetStartedPage() {
                     }`}>{s.label}</p>
                     <p className="text-xs text-slate-400 mt-0.5 leading-snug">{s.desc}</p>
                     {incomplete && (
-                      <button onClick={() => setStep(i)}
-                        className="text-xs text-amber-500 font-semibold mt-0.5 hover:underline underline-offset-2">
-                        Not filled in — go back
-                      </button>
+                      <span className="text-xs text-amber-500 font-semibold mt-0.5 inline-block">
+                        Not filled in
+                      </span>
                     )}
                   </div>
                 </div>
