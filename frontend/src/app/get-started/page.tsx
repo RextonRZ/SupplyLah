@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabase";
 
 interface Product   { name: string; sku: string; price: string; stock: string; }
 interface Customer  { name: string; phone: string; address: string; }
-interface TeamMember { email: string; role: "Wholesale Supplier" | "Warehouse Manager"; }
+interface TeamMember { email: string; phone: string; role: "Wholesale Supplier" | "Warehouse Manager"; }
 interface Rules {
   minOrderValue: string;
   allowDiscount: boolean;
@@ -326,12 +326,14 @@ function RulesStep({ rules, setRules }: { rules: Rules; setRules: (r: Rules) => 
 /* ── Step 4: Team ── */
 function TeamStep({ team, setTeam }: { team: TeamMember[]; setTeam: (t: TeamMember[]) => void }) {
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [role, setRole]   = useState<TeamMember["role"]>("Warehouse Manager");
 
   function addMember() {
-    if (!email || team.find(m => m.email === email)) return;
-    setTeam([...team, { email, role }]);
+    if (!email || !phone || team.find(m => m.email === email)) return;
+    setTeam([...team, { email, phone, role }]);
     setEmail("");
+    setPhone("");
   }
 
   return (
@@ -349,10 +351,14 @@ function TeamStep({ team, setTeam }: { team: TeamMember[]; setTeam: (t: TeamMemb
         ))}
       </div>
       <div>
-        <label className="block text-xs font-semibold text-slate-500 mb-1.5">Email address</label>
+        <label className="block text-xs font-semibold text-slate-500 mb-1.5">Email address & Contact number</label>
         <div className="flex gap-2">
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
             placeholder="teammate@company.com"
+            onKeyDown={(e) => e.key === "Enter" && addMember()}
+            className={INPUT} />
+          <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+            placeholder="Contact number"
             onKeyDown={(e) => e.key === "Enter" && addMember()}
             className={INPUT} />
           <select value={role} onChange={(e) => setRole(e.target.value as TeamMember["role"])}
@@ -361,17 +367,18 @@ function TeamStep({ team, setTeam }: { team: TeamMember[]; setTeam: (t: TeamMemb
             <option>Wholesale Supplier</option>
             <option>Warehouse Manager</option>
           </select>
-          <button onClick={addMember} disabled={!email}
-            className="btn-primary px-5 py-3 text-sm font-bold whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
+          <button onClick={addMember} disabled={!email || !phone}
+            className="btn-primary flex items-center justify-center px-5 py-3 text-sm font-bold whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none">
             Invite
           </button>
         </div>
       </div>
       {team.length > 0 ? (
-        <DataTable headers={["Email", "Role", "Status", ""]}>
+        <DataTable headers={["Email", "Contact", "Role", "Status", ""]}>
           {team.map((m, i) => (
             <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
               <td className="px-4 py-3 text-slate-900">{m.email}</td>
+              <td className="px-4 py-3 text-slate-600 text-sm">{m.phone}</td>
               <td className="px-4 py-3">
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
                   m.role === "Wholesale Supplier" ? "bg-teal-100 text-teal-700" : "bg-slate-100 text-slate-600"
@@ -559,7 +566,7 @@ export default function GetStartedPage() {
 
         {/* Main content */}
         <div className="flex-1 flex flex-col overflow-y-auto">
-          <div className="flex-1 px-8 lg:px-14 py-10 max-w-2xl">
+          <div className="flex-1 px-8 lg:px-14 py-10 max-w-3xl">
 
 
             {/* Step header */}
