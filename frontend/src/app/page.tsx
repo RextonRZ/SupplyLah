@@ -164,9 +164,9 @@ function PhoneWithChat({ onStep }: { onStep?: (s: number) => void } = {}) {
 
         {/* WhatsApp header */}
         <div className="bg-[#075e54] px-3 py-2 flex items-center gap-2 shrink-0">
-          <div className="w-[30px] h-[30px] rounded-full bg-[#25d366] flex items-center justify-center text-white font-bold text-[10px] shrink-0">SL</div>
+          <div className="w-[30px] h-[30px] rounded-full bg-[#25d366] flex items-center justify-center text-white font-bold text-[10px] shrink-0">ES</div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-[11px] font-semibold leading-tight">SupplyLah AI</p>
+            <p className="text-white text-[11px] font-semibold leading-tight">Encik Syahmi</p>
             <p className="text-green-200 text-[9px]">● online</p>
           </div>
           <div className="flex gap-3 text-white text-[13px] shrink-0">

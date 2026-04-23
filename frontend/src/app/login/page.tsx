@@ -109,9 +109,12 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    const { error: authError, data } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) { setError(authError.message); setLoading(false); }
-    else { router.push("/dashboard"); }
+    else {
+      const onboarded = data.user?.user_metadata?.onboarding_complete === true;
+      router.push(onboarded ? "/dashboard" : "/get-started");
+    }
   }
 
   return (

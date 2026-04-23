@@ -130,29 +130,54 @@ export default function SignupPage() {
     if (!form.agreed) { setError("Please agree to the Terms of Service and Privacy Policy."); return; }
 
     setLoading(true);
-    const { error: authError } = await supabase.auth.signUp({
+    const { error: authError, data } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
-      options: { data: { full_name: form.fullName, business_name: form.businessName, phone: form.phone } },
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        data: {
+          full_name: form.fullName,
+          business_name: form.businessName,
+          phone: form.phone,
+          onboarding_complete: false,
+        },
+      },
     });
     if (authError) { setError(authError.message); setLoading(false); }
-    else { setSuccess(true); setTimeout(() => router.push("/dashboard"), 3000); }
+    else if (data.session) {
+      // Email confirmation disabled — already signed in, go straight to setup
+      router.push("/get-started");
+    } else {
+      // Email confirmation enabled — show "check your email" screen
+      setSuccess(true);
+    }
   }
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-teal-50 px-6">
-        <div className="max-w-md w-full text-center bg-white rounded-3xl shadow-xl p-10 border border-teal-100">
-          <div className="w-24 h-24 mx-auto mb-6 rounded-2xl bg-teal-100 flex items-center justify-center overflow-hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/mascot-celebration.png" alt="🎉" className="w-full h-full object-contain"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML += `<span class="text-5xl">🎉</span>`; }} />
+      <div className="min-h-screen flex items-center justify-center px-6"
+        style={{ background: "linear-gradient(135deg, #edfefe 0%, #c7f0f0 40%, #edfefe 100%)" }}>
+        <div className="max-w-sm w-full text-center">
+          {/* Mascot — no frame, just floating */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/mascot-celebration.png"
+            alt=""
+            className="w-40 h-40 object-contain mx-auto mb-4 drop-shadow-xl animate-float"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          />
+
+          <h2 className="text-3xl font-black text-teal-900 mb-2">Check your email</h2>
+          <p className="text-slate-600 text-sm mb-1">
+            We sent a link to <strong className="text-slate-800">{form.email}</strong>
+          </p>
+          <p className="text-slate-400 text-xs mb-7">
+            Click it to verify and set up your store. Check your spam folder if it doesn&apos;t show up.
+          </p>
+
+          <div className="bg-white border border-teal-100 rounded-2xl px-5 py-4 shadow-sm text-sm text-slate-600 leading-relaxed">
+            You&apos;ll be taken to your store setup once verified.
           </div>
-          <h2 className="text-2xl font-black text-teal-900 mb-2">Welcome to SupplyLah!</h2>
-          <p className="text-slate-500 text-sm mb-6">Check your email to verify your account. Redirecting to dashboard…</p>
-          <Link href="/dashboard" className="btn-primary inline-block px-8 py-3 text-sm font-bold">
-            Go to Dashboard →
-          </Link>
         </div>
       </div>
     );
