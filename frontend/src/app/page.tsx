@@ -20,28 +20,45 @@ function Navbar() {
   return (
     <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-teal-100">
       <div className="max-w-6xl mx-auto px-6 py-1 md:py-2 flex items-center justify-between">
-        <Link href="/"><SupplyLahLogo /></Link>
+        <div className="flex items-center gap-8 md:gap-4">
+          <Link href="/"><SupplyLahLogo /></Link>
 
-        {/* Desktop links */}
-        <div className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600">
-          <a href="#features"   className="hover:text-teal-700 transition-colors">Features</a>
-          <a href="#how-it-works" className="hover:text-teal-700 transition-colors">How It Works</a>
-          <a href="#pricing"    className="hover:text-teal-700 transition-colors">Pricing</a>
+          {/* Desktop links */}
+          <div className="hidden md:flex items-center gap-1 text-sm font-medium text-slate-600 ml-12 md:ml-32">
+            {(["#features","Features","#how-it-works","How It Works","#pricing","Pricing"] as const)
+              .reduce<[string,string][]>((acc,_,i,arr) => i%2===0 ? [...acc,[arr[i] as string,arr[i+1] as string]] : acc, [])
+              .map(([href, label]) => (
+                <a key={href} href={href} className="relative px-4 py-2 group">
+                  {/* Pill background */}
+                  <span className="absolute inset-0 bg-gradient-to-br from-teal-50 to-teal-100/90 rounded-lg scale-90 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-250 ease-out" />
+                  {/* Glowing underline */}
+                  <span className="absolute bottom-1 left-4 right-4 h-[2px] rounded-full bg-gradient-to-r from-teal-400 to-teal-600 scale-x-0 group-hover:scale-x-100 transition-transform duration-280 ease-out origin-left shadow-[0_0_6px_rgba(20,188,188,0.7)]" />
+                  {/* Label */}
+                  <span className="relative z-10 group-hover:text-teal-800 group-hover:-translate-y-px transition-all duration-250">{label}</span>
+                </a>
+              ))
+            }
+          </div>
         </div>
 
         {/* Desktop CTA */}
         <div className="hidden md:flex items-center gap-3">
-          <Link
-            href="/login"
-            className="text-sm font-semibold text-teal-700 hover:text-teal-900 px-4 py-2 rounded-lg hover:bg-teal-50 transition-all"
-          >
-            Log in
+          {/* Log in — clean text button with pill hover */}
+          <Link href="/login" className="group relative text-sm font-semibold text-teal-700 hover:text-teal-900 px-4 py-2 rounded-lg overflow-hidden transition-colors duration-200">
+            <span className="absolute inset-0 bg-teal-50 rounded-lg scale-90 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-250 ease-out" />
+            <span className="relative z-10">Log in</span>
           </Link>
-          <Link
-            href="/signup"
-            className="text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl shadow-sm hover:shadow-md transition-all"
-          >
-            Sign up free
+          {/* Sign up — gradient + glow + shimmer */}
+          <Link href="/signup" className="group relative overflow-hidden text-sm font-semibold text-white px-5 py-2.5 rounded-xl transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_4px_20px_rgba(20,188,188,0.55)]"
+            style={{ background: "linear-gradient(135deg,#0d8080 0%,#14bcbc 100%)", boxShadow: "0 2px 8px rgba(20,188,188,0.2)" }}>
+            {/* Shimmer layer */}
+            <span className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 overflow-hidden rounded-xl">
+              <span className="absolute top-0 h-full w-1/2 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12" style={{ animation: "none" }} />
+            </span>
+            <span className="relative z-10 flex items-center gap-1.5">
+              Sign up free
+              <span className="group-hover:translate-x-0.5 transition-transform duration-300">→</span>
+            </span>
           </Link>
         </div>
 
@@ -240,10 +257,10 @@ function Hero() {
           </p>
           <div className="flex flex-wrap gap-4 mb-10">
             <Link href="/signup" className="btn-primary text-base">
-              Get Started Free
+              <span className="relative z-10">Get Started Free</span>
             </Link>
             <Link href="/dashboard" className="btn-outline text-base">
-              View Live Demo
+              <span>View Live Demo</span>
             </Link>
           </div>
         </div>
