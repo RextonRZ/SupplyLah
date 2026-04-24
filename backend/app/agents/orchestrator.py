@@ -931,18 +931,20 @@ async def _handle_new_order(
         }),
     )
 
+    quote_msg = _build_quote_message(lang, inventory)
+
     await supabase_service.log_message(
         customer_id=customer.customer_id,
         order_id=order.order_id,
         sender_type="agent",
         message_type="text",
-        content=inventory.quote_message,
+        content=quote_msg,
     )
 
     emit(f"✅ [DB] Order {order.order_id[:8]}... saved — status: Awaiting Confirmation")
     emit("📝 [Composer] Generating order quote message for buyer...")
     logger.info("Order %s created, awaiting buyer confirmation", order.order_id)
-    return inventory.quote_message
+    return quote_msg
 
 
 async def _handle_confirmation_reply(
@@ -997,24 +999,6 @@ async def _handle_confirmation_reply(
 
     await supabase_service.update_order_status(pending_order.order_id, OrderStatus.CONFIRMED)
 
-    async def _do_logistics():
-        logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
-        await supabase_service.log_message(
-            customer_id=customer.customer_id,
-            order_id=pending_order.order_id,
-            sender_type="agent",
-            message_type="text",
-            content=logistics.confirmation_message,
-        )
-        await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
-        emit_message(logistics.confirmation_message)
-        collector = _msg_collector.get()
-        if collector is not None:
-            collector.append(logistics.confirmation_message)
-
-    _inventory_queue.put_nowait(_do_logistics())
-    ensure_inventory_worker()
-
     ack = (
         "✅ Dapat! Tengah sahkan pesanan dan atur penghantaran... "
         "Kejap lagi dapat konfirmasi dengan tracking! 🚚\n"
@@ -1028,6 +1012,40 @@ async def _handle_confirmation_reply(
         message_type="text",
         content=ack,
     )
+    emit_message(ack)
+    emit("🚚 [Logistics] Arranging delivery...")
+
+    _collector = _msg_collector.get()
+    if _collector is not None:
+        # Inline: mock-chat — run logistics now so result is in the response
+        logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=pending_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=logistics.confirmation_message,
+        )
+        await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
+        emit_message(logistics.confirmation_message)
+        _collector.append(logistics.confirmation_message)
+    else:
+        # Background: real Twilio path
+        async def _do_logistics():
+            logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=pending_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=logistics.confirmation_message,
+            )
+            await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
+            emit_message(logistics.confirmation_message)
+
+        _inventory_queue.put_nowait(_do_logistics())
+        ensure_inventory_worker()
+
     return ack
 
 
