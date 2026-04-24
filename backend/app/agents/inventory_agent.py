@@ -122,10 +122,19 @@ async def run_inventory_agent(
         )
 
         raw_output = raw_output.strip()
-        if raw_output.startswith("```"):
-            raw_output = raw_output.split("```")[1]
+
+        # Strip any markdown code fences the model may have added
+        import re as _re
+        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+        if fence_match:
+            raw_output = fence_match.group(1).strip()
+        elif raw_output.startswith("```"):
+            raw_output = raw_output.strip("`").strip()
             if raw_output.startswith("json"):
-                raw_output = raw_output[4:]
+                raw_output = raw_output[4:].strip()
+
+        if not raw_output:
+            raise json.JSONDecodeError("Empty response from model", "", 0)
 
         data = json.loads(raw_output)
 

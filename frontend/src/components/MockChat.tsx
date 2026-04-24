@@ -89,6 +89,9 @@ export default function MockChat({
     // 2. Open SSE stream BEFORE posting so we catch every log from the start
     const sessionId = crypto.randomUUID();
     esRef.current?.close();
+    // Pre-register the ack we already showed — so when backend emits it via SSE we skip it
+    sseShown.current.clear();
+    sseShown.current.add(ackMsg);
     const es = new EventSource(`${BACKEND_URL}/api/session-logs/${sessionId}`);
     esRef.current = es;
 
@@ -101,7 +104,7 @@ export default function MockChat({
           if (hint) setChatHint(hint);
         }
         if (data.type === "message") {
-          // Show agent message in chat immediately — track to avoid duplicate from HTTP response
+          if (sseShown.current.has(data.text)) return; // already shown (e.g. instant ack)
           sseShown.current.add(data.text);
           setMessages((prev) => [...prev, { role: "agent", text: data.text, time: now() }]);
         }
