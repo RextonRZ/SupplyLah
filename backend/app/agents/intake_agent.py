@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.models.schemas import IntakeResult, OrderLineItem
 from app.services import supabase_service
 from app.services.glm_client import run_agent_loop
+from app.services.log_stream import emit
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,9 @@ async def run_intake_agent(
     system_prompt = _load_system_prompt()
 
     # Fetch catalog once; inject into context instead of tool-call round trips
+    emit("📦 [IntakeAgent] Loading product catalogue from database...")
     products = await supabase_service.get_products(merchant_id)
+    emit(f"📦 [IntakeAgent] Catalogue loaded — {len(products)} products, aliases mapped")
     catalog = json.dumps(
         [
             {
@@ -60,12 +63,14 @@ async def run_intake_agent(
     ]
 
     try:
+        emit(f"🤖 [IntakeAgent] Calling AI model ({settings.model_reasoning})...")
         raw_output = await run_agent_loop(
             model=settings.model_reasoning,
             messages=messages,
             tools=[],
             tool_executors={},
         )
+        emit("✅ [IntakeAgent] AI model responded — parsing output...")
         # Strip markdown fences if the model adds them
         raw_output = raw_output.strip()
         if raw_output.startswith("```"):

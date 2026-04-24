@@ -24,6 +24,7 @@ from app.models.schemas import (
     OrderStatus,
 )
 from app.services import supabase_service, twilio_service
+from app.services.log_stream import emit, emit_message
 from app.services.glm_client import describe_image, transcribe_audio
 from app.services.s3_service import upload_media
 from app.services.twilio_service import download_twilio_media
@@ -112,6 +113,7 @@ async def _send_intermediate(
     collector = _msg_collector.get()
     if collector is not None:
         collector.append(message)
+    emit_message(message)  # stream to demo chat immediately via SSE
 
 
 # ─────────────────────────────────────────
@@ -184,10 +186,16 @@ async def _handle_new_order(
     settings = get_settings()
 
     # Step 1: Intake Agent
+    emit("🧠 [IntakeAgent] Sending message to AI model for parsing...")
     intake = await run_intake_agent(raw_text, merchant_id)
     logger.info(
         "Intake: intent=%s items=%d confidence=%.2f",
         intake.intent, len(intake.items), intake.confidence,
+    )
+    emit(
+        f"🎯 [IntakeAgent] Intent: {intake.intent} | "
+        f"Items detected: {len(intake.items)} | "
+        f"Confidence: {intake.confidence:.0%}"
     )
 
     # Non-order intents (or API errors that returned intent="other")
@@ -226,19 +234,28 @@ async def _handle_new_order(
     # Step 1.5: Notify customer we're checking stock
     lang = intake.language_detected or "ms"
     items_preview = ", ".join(
-        f"{i.quantity}x {i.product_name}" for i in intake.items[:3]
+        f"{i.quantity}x {i.product_name}" for i in intake.items
     )
-    if len(intake.items) > 3:
-        items_preview += f" +{len(intake.items) - 3} more"
-    await _send_intermediate(customer, _ack_checking_stock(lang, items_preview))
+    ack_stock_msg = _ack_checking_stock(lang, items_preview)
+    await _send_intermediate(customer, ack_stock_msg)
+    emit(f"📱 [WhatsApp] Sent to buyer: \"{ack_stock_msg[:70]}{'…' if len(ack_stock_msg) > 70 else ''}\"")
 
     # Step 2: Inventory Agent
+    emit(f"📦 [InventoryAgent] Checking stock for {len(intake.items)} item(s)...")
     inventory = await run_inventory_agent(intake, merchant_id, intake.language_detected)
+    emit(
+        f"📦 [InventoryAgent] Stock check complete — "
+        f"{'order feasible ✓' if inventory.order_feasible else 'order unfeasible ✗'} | "
+        f"Total: RM{inventory.grand_total:.2f}"
+    )
 
     if not inventory.order_feasible or not inventory.items:
-        fallback = (
-            "Sorry, we're unable to fulfil this order right now. "
-            "Please contact us directly for assistance."
+        # Use the AI's quote_message if it has one (e.g. explains which items are out of stock)
+        # otherwise fall back to a generic message
+        fallback = inventory.quote_message or (
+            "Maaf, kami tidak dapat memproses pesanan ini sekarang. "
+            "Sila cuba lagi sebentar. / "
+            "Sorry, we couldn't process this order right now. Please try again in a moment."
         )
         await supabase_service.log_message(
             customer_id=customer.customer_id,
@@ -249,6 +266,7 @@ async def _handle_new_order(
         return fallback
 
     # Persist order in Awaiting Confirmation state
+    emit("💾 [DB] Saving order to database...")
     order = await supabase_service.create_order(
         customer_id=customer.customer_id,
         merchant_id=merchant_id,
@@ -293,6 +311,8 @@ async def _handle_new_order(
         content=inventory.quote_message,
     )
 
+    emit(f"✅ [DB] Order {order.order_id[:8]}... saved — status: Awaiting Confirmation")
+    emit("📝 [Composer] Generating order quote message for buyer...")
     logger.info("Order %s created, awaiting buyer confirmation", order.order_id)
     return inventory.quote_message
 
@@ -393,7 +413,9 @@ async def handle_incoming_message(
     ensure_inventory_worker()
 
     # 1. Get or create customer
+    emit(f"👤 [CRM] Looking up customer: {from_number}...")
     customer = await supabase_service.get_or_create_customer(from_number, merchant_id)
+    emit(f"👤 [CRM] Customer found — ID ...{customer.customer_id[-8:]}")
 
     # 2. Log inbound message
     await supabase_service.log_message(
@@ -405,12 +427,15 @@ async def handle_incoming_message(
     )
 
     # 3. Check for pending order (Awaiting Confirmation state)
+    emit("📋 [State] Checking for pending confirmation orders...")
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
 
     if pending_order:
+        emit(f"📋 [State] Pending order found — {pending_order.order_id[:8]}... awaiting confirmation reply")
         raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_confirmation_reply(raw_text, pending_order, customer)
     else:
+        emit("📋 [State] No pending order — treating as new order request")
         # Send immediate ack so the customer knows we received their message
         lang = _detect_language(text_content or "")
         await _send_intermediate(customer, _ack_received(message_type, lang))

@@ -1,14 +1,17 @@
 """Twilio WhatsApp webhook receiver and mock chat endpoint."""
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 
-from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Form, Header, HTTPException, Request
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from app.agents.orchestrator import handle_incoming_message, _msg_collector
 from app.config import get_settings
 from app.models.schemas import IncomingMessage, MessageType
+from app.services import log_stream
 from app.services.twilio_service import send_whatsapp_message
 
 logger = logging.getLogger(__name__)
@@ -86,16 +89,53 @@ async def twilio_webhook(
 
 
 # ─────────────────────────────────────────
+# SSE log stream for demo UI
+# ─────────────────────────────────────────
+
+@router.get("/api/session-logs/{session_id}")
+async def session_logs(session_id: str):
+    """Stream real agent log lines to the demo UI via Server-Sent Events."""
+    queue = log_stream.register(session_id)
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=120.0)
+                    if msg == log_stream.DONE:
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                        break
+                    yield f"data: {msg}\n\n"  # already serialised JSON
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            log_stream.unregister(session_id)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─────────────────────────────────────────
 # Mock chat endpoint (demo UI backend)
 # ─────────────────────────────────────────
 
 @router.post("/webhook/mock-chat")
-async def mock_chat(payload: IncomingMessage):
+async def mock_chat(
+    payload: IncomingMessage,
+    x_session_id: str = Header(default=""),
+):
     """Simulate a WhatsApp message for the demo UI without real Twilio credentials."""
     settings = get_settings()
 
     collector: list[str] = []
     token = _msg_collector.set(collector)
+    if x_session_id:
+        log_stream.set_session(x_session_id)
     try:
         await handle_incoming_message(
             from_number=payload.from_number,
@@ -109,6 +149,7 @@ async def mock_chat(payload: IncomingMessage):
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         _msg_collector.reset(token)
+        if x_session_id:
+            log_stream.close(x_session_id)
 
-    # Return all messages (ack, progress, final) so the UI can show them progressively
     return {"replies": collector, "from_number": payload.from_number}

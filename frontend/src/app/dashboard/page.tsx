@@ -1630,26 +1630,32 @@ export default function Dashboard() {
                 <div className="flex-1 overflow-y-auto p-6 font-mono text-[11px] leading-relaxed space-y-3 custom-scrollbar">
                   {aiLogs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-600 italic">
-                      <p>Send a message to see the AI agent's logic flow...</p>
+                      <p>Send a message to see the AI agent&apos;s logic flow...</p>
                     </div>
                   ) : (
-                    aiLogs.map((log, i) => (
-                      <div
-                        key={i}
-                        className="animate-in fade-in slide-in-from-left-1"
-                      >
-                        <span className="text-slate-600 mr-2">[{log.t}]</span>
-                        <span
-                          className={
-                            log.m.includes("AI Agent")
-                              ? "text-teal-400"
-                              : "text-slate-300"
-                          }
-                        >
-                          {log.m}
-                        </span>
-                      </div>
-                    ))
+                    aiLogs.map((log, i) => {
+                      const isSeparator = log.m.startsWith("─");
+                      const isError     = log.m.includes("❌");
+                      const isSuccess   = log.m.includes("✅");
+                      const isBuyer     = log.m.startsWith("📨");
+                      const color = isSeparator ? "text-slate-700"
+                                  : isError     ? "text-red-400"
+                                  : isSuccess   ? "text-green-400"
+                                  : isBuyer     ? "text-yellow-300"
+                                  : log.m.includes("Inventory") ? "text-blue-300"
+                                  : log.m.includes("Pricing") || log.m.includes("🧮") ? "text-purple-300"
+                                  : log.m.includes("Logistics") || log.m.includes("🚚") ? "text-orange-300"
+                                  : log.m.includes("Composer") || log.m.includes("📝") ? "text-pink-300"
+                                  : "text-slate-300";
+                      return (
+                        <div key={i} className={isSeparator ? "my-1" : ""}>
+                          {!isSeparator && (
+                            <span className="text-slate-600 mr-2 select-none">[{log.t}]</span>
+                          )}
+                          <span className={color}>{log.m}</span>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>

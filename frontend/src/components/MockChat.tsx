@@ -4,13 +4,38 @@ import { useState, useRef, useEffect } from "react";
 import { BACKEND_URL } from "@/lib/supabase";
 
 interface ChatMessage {
-  role: "buyer" | "system";
+  role: "buyer" | "agent";
   text: string;
   time: string;
 }
 
 const DEMO_PHONE = "+60198765432";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
+
+// Mirrors the backend's _ack_received() so we can show it immediately
+const MALAY_WORDS = /\b(nak|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna)\b/i;
+function getImmediateAck(text: string): string {
+  return MALAY_WORDS.test(text)
+    ? "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..."
+    : "On it! 🔍 Processing your order, give me a sec...";
+}
+
+// Map real backend log lines → short chat bubble hints
+function logToHint(log: string): string | null {
+  if (log.includes("CRM") || log.includes("customer")) return "Looking up your profile…";
+  if (log.includes("catalogue") || log.includes("Catalogue")) return "Loading product catalogue…";
+  if (log.includes("AI model") || log.includes("IntakeAgent")) return "AI model processing…";
+  if (log.includes("Intent:")) return "Order intent analysed ✓";
+  if (log.includes("InventoryAgent") || log.includes("stock")) return "Checking stock levels…";
+  if (log.includes("grand_total") || log.includes("Total:")) return "Calculating order total…";
+  if (log.includes("DB") || log.includes("Saving")) return "Saving order to database…";
+  if (log.includes("Composer") || log.includes("quote")) return "Drafting your summary…";
+  return null;
+}
+
+function now() {
+  return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
+}
 
 export default function MockChat({
   merchantId,
@@ -20,46 +45,81 @@ export default function MockChat({
   onLog?: (message: string) => void;
 }) {
   const resolvedMerchant = merchantId || DEMO_MERCHANT;
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      role: "system",
-      text: '👋 Demo WhatsApp — type a message as if you\'re a buyer placing a wholesale order.\n\nTry: "boss nak 3 botol minyak masak n 2 bag beras, hantar ke Jalan Ampang KL"',
+      role: "agent",
+      text: "👋 Demo WhatsApp — type a message as if you're a buyer placing a wholesale order.\n\nTry: \"boss nak 3 botol minyak masak n 2 bag beras, hantar ke Jalan Ampang KL\"",
       time: now(),
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [chatHint, setChatHint] = useState("Thinking…");
+
   const bottomRef = useRef<HTMLDivElement>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const sseShown = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, loading]);
 
-  function now() {
-    return new Date().toLocaleTimeString("en-MY", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
+  // Clean up SSE on unmount
+  useEffect(() => () => { esRef.current?.close(); }, []);
 
   async function sendMessage() {
     if (!input.trim() || loading) return;
     const text = input.trim();
     setInput("");
 
-    setMessages((prev) => [...prev, { role: "buyer", text, time: now() }]);
+    // 1. User message + immediate ack appear instantly
+    const ackMsg = getImmediateAck(text);
+    setMessages((prev) => [
+      ...prev,
+      { role: "buyer", text, time: now() },
+      { role: "agent", text: ackMsg, time: now() },
+    ]);
     setLoading(true);
+    setChatHint("Connecting to agent pipeline…");
 
-    // Trigger reasoning log
-    onLog?.(`Buyer: "${text}"`);
-    onLog?.(
-      `Intake Agent: Analyzing message for merchant ${resolvedMerchant.slice(0, 8)}...`,
-    );
+    onLog?.("─────────────────────────────────");
+    onLog?.(`📨 Buyer: "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`);
+
+    // 2. Open SSE stream BEFORE posting so we catch every log from the start
+    const sessionId = crypto.randomUUID();
+    esRef.current?.close();
+    const es = new EventSource(`${BACKEND_URL}/api/session-logs/${sessionId}`);
+    esRef.current = es;
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "log") {
+          onLog?.(data.message);
+          const hint = logToHint(data.message);
+          if (hint) setChatHint(hint);
+        }
+        if (data.type === "message") {
+          // Show agent message in chat immediately — track to avoid duplicate from HTTP response
+          sseShown.current.add(data.text);
+          setMessages((prev) => [...prev, { role: "agent", text: data.text, time: now() }]);
+        }
+        if (data.type === "done") es.close();
+      } catch {}
+    };
+    es.onerror = () => es.close();
+
+    const t0 = Date.now();
 
     try {
+      // 3. POST with session ID so backend pushes logs to our SSE queue
       const res = await fetch(`${BACKEND_URL}/webhook/mock-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": sessionId,
+        },
         body: JSON.stringify({
           from_number: DEMO_PHONE,
           message_type: "text",
@@ -67,82 +127,123 @@ export default function MockChat({
           merchant_id: resolvedMerchant,
         }),
       });
-      const data = await res.json();
-      const replies: string[] =
-        data.replies ?? (data.reply ? [data.reply] : []);
 
-      onLog?.(`Orchestrator: Routing to GLM-5.1 for response generation...`);
+      es.close();
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      const data = await res.json();
+      const allReplies: string[] = data.replies ?? (data.reply ? [data.reply] : []);
+      // Skip the instant ack + anything already shown via SSE message events
+      const replies = allReplies.filter(
+        (r) => r.trim() !== ackMsg.trim() && !sseShown.current.has(r)
+      );
+      sseShown.current.clear();
+
+      onLog?.(`✅ [Pipeline] Response in ${elapsed}s — ${replies.length} message(s) to buyer`);
+      setLoading(false);
 
       for (let i = 0; i < replies.length; i++) {
-        // Brief typing pause between messages so they feel sequential
-        if (i > 0) await new Promise((r) => setTimeout(r, 700));
-        setMessages((prev) => [
-          ...prev,
-          { role: "system", text: replies[i], time: now() },
-        ]);
-        onLog?.(`AI Agent: ${replies[i].substring(0, 50)}...`);
+        if (i > 0) await new Promise((r) => setTimeout(r, 650));
+        setMessages((prev) => [...prev, { role: "agent", text: replies[i], time: now() }]);
       }
-    } catch (err) {
-      onLog?.(`System Error: Backend connection failed.`);
+    } catch {
+      es.close();
+      onLog?.("❌ [System] Backend unreachable — is the server running?");
+      setLoading(false);
       setMessages((prev) => [
         ...prev,
-        {
-          role: "system",
-          text: "⚠ Error connecting to backend. Is it running?",
-          time: now(),
-        },
+        { role: "agent", text: "⚠ Error connecting to backend. Is it running?", time: now() },
       ]);
-    } finally {
-      setLoading(false);
     }
   }
 
   return (
-    <div className="bg-white flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="bg-green-600 text-white px-5 h-24 py-4 flex items-end gap-3">
-        <div className="w-9 h-9 rounded-full bg-green-400 flex items-center justify-center text-lg">
+    <div className="bg-black flex flex-col h-full overflow-hidden">
+      {/* Fake phone status bar */}
+      <div className="bg-black text-white flex items-center justify-between px-5 pt-2 pb-1 shrink-0" style={{ fontSize: "11px" }}>
+        <span className="font-semibold tabular-nums">{now()}</span>
+        <div className="flex items-center gap-1.5">
+          {/* Signal bars */}
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="white">
+            <rect x="0" y="8" width="3" height="4" rx="0.5" />
+            <rect x="4.5" y="5" width="3" height="7" rx="0.5" />
+            <rect x="9" y="2" width="3" height="10" rx="0.5" />
+            <rect x="13.5" y="0" width="2.5" height="12" rx="0.5" opacity="0.3" />
+          </svg>
+          {/* WiFi */}
+          <svg width="15" height="12" viewBox="0 0 24 18" fill="white">
+            <path d="M12 14a2 2 0 110 4 2 2 0 010-4z"/>
+            <path d="M5.6 9.4a9 9 0 0112.8 0" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round"/>
+            <path d="M1.4 5.2a15 15 0 0121.2 0" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.5"/>
+          </svg>
+          {/* Battery */}
+          <div className="flex items-center gap-0.5">
+            <div className="relative w-[22px] h-[11px] rounded-[2px] border border-white/80">
+              <div className="absolute inset-[1.5px] right-[3px] bg-white rounded-[1px]" />
+            </div>
+            <div className="w-[2px] h-[5px] bg-white/60 rounded-r-[1px]" />
+          </div>
+        </div>
+      </div>
+
+      {/* WhatsApp-style header */}
+      <div className="bg-[#075E54] text-white px-3 py-2 flex items-center gap-2.5 shrink-0">
+        <div className="w-8 h-8 rounded-full bg-green-400 flex items-center justify-center text-base shrink-0">
           🏪
         </div>
         <div>
-          <p className="text-sm font-bold">Demo Wholesaler</p>
-          <p className="text-xs opacity-80">WhatsApp Business (mock)</p>
+          <p className="text-sm font-bold leading-tight">Demo Wholesaler</p>
+          <p className="text-[10px] opacity-75 leading-tight">WhatsApp Business · end-to-end encrypted</p>
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#e5ddd5]">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#e5ddd5]">
         {messages.map((m, i) => (
           <div
             key={i}
             className={`flex ${m.role === "buyer" ? "justify-end" : "justify-start"}`}
           >
             <div
-              className={`max-w-[78%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
+              className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
                 m.role === "buyer"
                   ? "bg-[#dcf8c6] text-slate-800 rounded-tr-sm"
                   : "bg-white text-slate-800 rounded-tl-sm"
               }`}
             >
               <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
-              <p className="text-right text-[10px] text-slate-400 mt-1">
-                {m.time}
-              </p>
+              <p className="text-right text-[10px] text-slate-400 mt-0.5">{m.time}</p>
             </div>
           </div>
         ))}
+
+        {/* Animated thinking bubble */}
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-2 shadow-sm text-slate-400 text-sm">
-              SupplyLah AI is typing…
+            <div className="bg-white rounded-2xl rounded-tl-sm px-3 py-2.5 shadow-sm max-w-[85%]">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span
+                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
+                  style={{ animationDelay: "0ms" }}
+                />
+                <span
+                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
+                  style={{ animationDelay: "160ms" }}
+                />
+                <span
+                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
+                  style={{ animationDelay: "320ms" }}
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">{chatHint}</p>
             </div>
           </div>
         )}
+
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="border-t border-slate-200 bg-white px-3 pt-2 pb-5 flex items-end gap-2">
+      {/* Input bar */}
+      <div className="border-t border-slate-200 bg-[#f0f2f5] px-3 pt-2 pb-3 flex items-end gap-2 shrink-0">
         <textarea
           value={input}
           onChange={(e) => {
@@ -158,13 +259,12 @@ export default function MockChat({
           }}
           placeholder="Type your order…"
           rows={1}
-          className="flex-1 self-end resize-none rounded-2xl border border-slate-300 px-4 py-2 text-sm leading-5 focus:outline-none focus:border-green-400 max-h-[100px] overflow-y-auto"
+          className="flex-1 self-end resize-none rounded-2xl border-0 bg-white px-4 py-2 text-sm leading-5 focus:outline-none shadow-sm max-h-[100px] overflow-y-auto"
         />
-
         <button
           onClick={sendMessage}
           disabled={loading || !input.trim()}
-          className="w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center hover:bg-green-700 disabled:opacity-40"
+          className="w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center hover:bg-green-700 disabled:opacity-40 transition-colors shrink-0"
         >
           ➤
         </button>
