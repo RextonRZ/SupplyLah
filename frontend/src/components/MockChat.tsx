@@ -13,7 +13,6 @@ interface ChatMessage {
 
 const DEFAULT_PHONE = "+60198765432";
 const DEFAULT_NAME = "Demo Customer";
-const VOICE_BUYER_PHONE = "+60123456789";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
 // Helper function to get initial messages
@@ -180,7 +179,7 @@ export default function MockChat({
     setLoading(true);
 
     // 2. Trigger logs for the pipeline
-    onLog?.(`Buyer: [Voice Note sent from ${VOICE_BUYER_PHONE}]`);
+    onLog?.(`Buyer: [Voice Note sent from ${phone}]`);
     onLog?.(`S3 Service: Uploading '${currentVoiceFile}' to secure bucket...`);
 
     setTimeout(() => {
@@ -194,7 +193,7 @@ export default function MockChat({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          from_number: VOICE_BUYER_PHONE,
+          from_number: phone,
           message_type: "audio",
           media_url: `demo/${currentVoiceFile}`,
           merchant_id: resolvedMerchant,
