@@ -184,56 +184,56 @@ async def mock_chat(
 
     collector: list[str] = []
     token = _msg_collector.set(collector)
-    
+
+    # Register SSE session BEFORE any emits so logs reach the frontend
+    if x_session_id:
+        log_stream.set_session(x_session_id)
+
     text_content = payload.text_content
     message_type = payload.message_type
     media_url = payload.media_url
-    
+
     if message_type == MessageType.AUDIO and payload.media_url:
-        # Here, we'll simulate uploading the demo file to S3 and transcribing it.
-        # This part assumes you'll manually place ok.m4a as suggested below.
-        
-        # 1. Check which file the React frontend is asking for
         if "ok.m4a" in payload.media_url:
             target_filename = "ok.m4a"
         else:
             target_filename = "order.m4a"
-            
+
         demo_audio_path = Path(__file__).parent.parent / "app" / "assets" / "demo" / "voice_notes" / target_filename
         if not demo_audio_path.exists():
             logger.error(f"Demo audio file not found at {demo_audio_path}")
             raise HTTPException(status_code=500, detail=f"Demo audio file {target_filename} not found.")
 
         try:
+            from app.services.log_stream import emit
+            emit("🎙️ [Transcription] Uploading voice note to S3...")
+
             with open(demo_audio_path, "rb") as f:
                 audio_content = f.read()
 
-            s3_object_name = f"audio/demo/{payload.from_number}/{target_filename}"
-            # Assuming content_type for ok.m4a is "audio/m4a"
             s3_file_url = await upload_media(audio_content, "audio/m4a", from_number=payload.from_number)
 
             if not s3_file_url:
                 raise Exception("Failed to upload demo audio to S3.")
-            
+
             s3_key = s3_file_url.split(".local/")[-1] if ".local/" in s3_file_url else s3_file_url.split(".com/")[-1]
             presigned_url = await generate_presigned_url(s3_key)
 
             if not presigned_url:
                 raise Exception("Failed to generate pre-signed URL for demo audio.")
 
+            emit("🎙️ [Transcription] Calling Groq Whisper-v3 for transcription...")
             transcription_result = await transcribe_audio_from_url(presigned_url, "audio/m4a")
             text_content = transcription_result["transcript"]
-            message_type = MessageType.TEXT # After transcription, treat as text
+            message_type = MessageType.TEXT
             media_url = None
             logger.info(f"Mock chat transcription ({target_filename}): {text_content}")
+
+            emit(f"🎙️ [Transcription] Result: \"{text_content[:100]}{'...' if len(text_content) > 100 else ''}\"")
 
         except Exception as exc:
             logger.error("Mock chat audio processing error: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail=f"Mock chat audio error: {str(exc)}")
-
-    
-    if x_session_id:
-        log_stream.set_session(x_session_id)
     try:
         await handle_incoming_message(
             from_number=payload.from_number,

@@ -9,11 +9,11 @@ interface ChatMessage {
   audioUrl?: string;
   time: string;
   isAudio?: boolean;
+  recordingDuration?: number;
 }
 
 const DEFAULT_PHONE = "+60198765432";
 const DEFAULT_NAME = "Demo Customer";
-const VOICE_BUYER_PHONE = "+60123456789";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
 // Helper function to get initial messages
@@ -170,64 +170,87 @@ export default function MockChat({
 
     const currentVoiceFile = voiceFile;
 
-    // 1. Add visual audio message to chat
     const audioMsg: ChatMessage = {
       role: "buyer",
       isAudio: true,
+      recordingDuration: recordingTime || 1,
       time: now(),
     };
     setMessages((prev) => [...prev, audioMsg]);
     setLoading(true);
+    setChatHint("Transcribing voice note…");
 
-    // 2. Trigger logs for the pipeline
-    onLog?.(`Buyer: [Voice Note sent from ${VOICE_BUYER_PHONE}]`);
-    onLog?.(`S3 Service: Uploading '${currentVoiceFile}' to secure bucket...`);
+    onLog?.("─────────────────────────────────");
+    onLog?.(`📨 Buyer: [Voice Note — ${currentVoiceFile}]`);
 
-    setTimeout(() => {
-      onLog?.(
-        `Transcription Service: Calling Groq (Whisper-v3) with pre-signed URL...`,
-      );
-    }, 5000);
+    // Open SSE stream like text mode
+    const sessionId = crypto.randomUUID();
+    esRef.current?.close();
+    sseShown.current.clear();
+    const es = new EventSource(`${BACKEND_URL}/api/session-logs/${sessionId}`);
+    esRef.current = es;
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "log") {
+          onLog?.(data.message);
+          const hint = logToHint(data.message);
+          if (hint) setChatHint(hint);
+        }
+        if (data.type === "message") {
+          if (sseShown.current.has(data.text)) return;
+          sseShown.current.add(data.text);
+          setMessages((prev) => [...prev, { role: "agent", text: data.text, time: now() }]);
+        }
+        if (data.type === "done") es.close();
+      } catch {}
+    };
+    es.onerror = () => es.close();
+
+    const t0 = Date.now();
 
     try {
       const res = await fetch(`${BACKEND_URL}/webhook/mock-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": sessionId,
+        },
         body: JSON.stringify({
-          from_number: VOICE_BUYER_PHONE,
+          from_number: phone,
           message_type: "audio",
           media_url: `demo/${currentVoiceFile}`,
           merchant_id: resolvedMerchant,
         }),
       });
 
+      es.close();
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       const data = await res.json();
-      const replies: string[] = data.replies ?? [];
+      const allReplies: string[] = data.replies ?? [];
+      const replies = allReplies.filter((r) => !sseShown.current.has(r));
+      sseShown.current.clear();
 
-      // Log the initial transcription result here
-      if (replies.length > 0) {
-        onLog?.(`Whisper Transcription: "${replies[0].substring(0, 70)}..."`);
-      }
+      onLog?.(`✅ [Pipeline] Response in ${elapsed}s — ${replies.length} message(s) to buyer`);
+      setLoading(false);
 
-      onLog?.(`Orchestrator: Transcription received. Routing to GLM-5.1...`);
+      await syncNameToDb();
 
       for (let i = 0; i < replies.length; i++) {
-        if (i > 0) await new Promise((r) => setTimeout(r, 800));
-        setMessages((prev) => [
-          ...prev,
-          { role: "agent", text: replies[i], time: now() },
-        ]);
-        onLog?.(`AI Agent: ${replies[i].substring(0, 60)}...`);
+        if (i > 0) await new Promise((r) => setTimeout(r, 650));
+        setMessages((prev) => [...prev, { role: "agent", text: replies[i], time: now() }]);
       }
 
       setVoiceFile((prev) => (prev === "order.m4a" ? "ok.m4a" : "order.m4a"));
-    } catch (err) {
+    } catch {
+      es.close();
+      onLog?.("❌ [System] Voice processing failed — is the backend running?");
+      setLoading(false);
       setMessages((prev) => [
         ...prev,
         { role: "agent", text: "⚠ Voice processing failed.", time: now() },
       ]);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -379,7 +402,7 @@ export default function MockChat({
                   <div className="flex-1 h-1 bg-slate-200 rounded-full relative">
                     <div className="absolute left-0 top-0 h-full w-1/3 bg-green-500 rounded-full" />
                   </div>
-                  <span className="text-[10px] text-slate-500">0:04</span>
+                  <span className="text-[10px] text-slate-500">0:{String(m.recordingDuration ?? 1).padStart(2, "0")}</span>
                 </div>
               ) : (
                 <WhatsAppText text={m.text} />
@@ -461,7 +484,7 @@ export default function MockChat({
                   : "bg-green-600 text-white"
               } disabled:opacity-40`}
             >
-              🎙️
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
             </button>
           </div>
         )}
