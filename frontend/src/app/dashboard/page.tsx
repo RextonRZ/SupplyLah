@@ -469,6 +469,7 @@ type Rules = {
   };
   chargeDelivery: boolean;
   deliveryFee: string;
+  customRules: string;
 };
 
 const defaultRules: Rules = {
@@ -477,6 +478,7 @@ const defaultRules: Rules = {
   substitutions: {},
   chargeDelivery: true,
   deliveryFee: "15",
+  customRules: "",
 };
 
 function Toggle({
@@ -599,6 +601,7 @@ function RulesAdminTab({
       rules.chargeDelivery
         ? `Charge delivery fee. Flat rate: RM${rules.deliveryFee || "0 (use live Lalamove price)"}.`
         : "Delivery fee absorbed by merchant.",
+      ...(rules.customRules?.trim() ? [`Additional rules:\n${rules.customRules.trim()}`] : []),
     ].join("\n\n");
 
     const { error: kbTextError } = await supabase.from("knowledge_base").upsert(
@@ -776,7 +779,7 @@ function RulesAdminTab({
           )}
         </div>
 
-        <div>
+        <div className="border-b border-slate-100">
           <Toggle
             on={rules.chargeDelivery}
             onChange={(v) => set("chargeDelivery", v)}
@@ -799,6 +802,22 @@ function RulesAdminTab({
               </span>
             </div>
           )}
+        </div>
+
+        <div className="pt-5">
+          <p className="text-sm font-semibold text-slate-800 mb-0.5">
+            Additional business rules
+          </p>
+          <p className="text-xs text-slate-500 mb-3">
+            Write any extra pricing or discount rules in plain text — the AI will follow these when generating quotes.
+          </p>
+          <textarea
+            rows={5}
+            value={rules.customRules || ""}
+            onChange={(e) => set("customRules", e.target.value)}
+            placeholder={`Examples:\n- Spend above RM500 and get 5% discount\n- Free delivery for orders above RM300\n- No orders accepted on Sundays\n- Bulk purchase of 100+ units gets 8% off`}
+            className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300 resize-none font-mono leading-relaxed"
+          />
         </div>
       </div>
     </div>

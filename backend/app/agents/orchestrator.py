@@ -363,6 +363,80 @@ async def _resolve_to_text(
 
 
 # ─────────────────────────────────────────
+# Inquiry handler — answers questions using live context
+# ─────────────────────────────────────────
+
+async def _handle_inquiry(
+    question: str,
+    merchant_id: str,
+    lang: str,
+) -> str:
+    """Answer a customer inquiry by injecting live stock + business rules into one LLM call."""
+    import asyncio as _asyncio
+    from app.services.glm_client import run_agent_loop
+
+    settings = get_settings()
+    emit("💬 [InquiryAgent] Loading context for inquiry...")
+
+    products, business_rules = await _asyncio.gather(
+        supabase_service.get_products(merchant_id),
+        supabase_service.get_knowledge_base_rules(merchant_id),
+    )
+
+    import json as _json
+    stock_summary = _json.dumps(
+        [
+            {
+                "product_name": p.product_name,
+                "unit_price": p.unit_price,
+                "stock_quantity": p.stock_quantity,
+                "aliases": p.slang_aliases,
+            }
+            for p in products
+        ],
+        ensure_ascii=False,
+    )
+
+    lang_instruction = "Reply in Bahasa Melayu (Malay)." if lang == "ms" else "Reply in English."
+
+    system = (
+        "You are a helpful customer service assistant for a Malaysian wholesale business called SupplyLah. "
+        "Answer the customer's question concisely and honestly using only the information provided. "
+        "Do not make up products, prices, or rules that are not listed. "
+        f"{lang_instruction} "
+        "Keep the reply short — 1 to 3 sentences. Use *bold* for key numbers or product names. "
+        "Do not use more than 1 emoji."
+        f"\n\nCurrent stock:\n{stock_summary}"
+        f"\n\nBusiness rules:\n{business_rules or 'No specific rules configured.'}"
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": question},
+    ]
+
+    emit("🤖 [InquiryAgent] Calling AI model...")
+    try:
+        answer = await run_agent_loop(
+            model=settings.model_reasoning,
+            messages=messages,
+            tools=[],
+            tool_executors={},
+        )
+        emit("✅ [InquiryAgent] Answer ready")
+        return answer.strip() or (
+            "Maaf, saya tidak dapat menjawab soalan itu sekarang." if lang == "ms"
+            else "Sorry, I couldn't answer that right now."
+        )
+    except Exception as exc:
+        logger.error("Inquiry agent error: %s", exc)
+        return (
+            "Maaf, sistem kami sibuk sekarang. Cuba lagi dalam seminit ya! 🙏" if lang == "ms"
+            else "Sorry, our system is busy right now. Please try again in a minute! 🙏"
+        )
+
+
+# ─────────────────────────────────────────
 # Core orchestration handlers
 # ─────────────────────────────────────────
 
@@ -387,17 +461,23 @@ async def _handle_new_order(
         f"Confidence: {intake.confidence:.0%}"
     )
 
-    # Non-order intents (or API errors that returned intent="other")
+    # Non-order intents
     if intake.intent != "order":
         if intake.clarification_needed and intake.clarification_message:
-            # Covers API errors / service-down cases — use the message the agent set
+            # API error / parse failure — use the clarification message directly
             msg = intake.clarification_message
+        elif intake.intent == "inquiry":
+            # Customer asking a question — answer from live context
+            emit("💬 [Orchestrator] Inquiry intent detected — routing to inquiry handler")
+            lang = _detect_language(raw_text)
+            msg = await _handle_inquiry(raw_text, merchant_id, lang)
         else:
-            msg = (
-                "Hi! I can help you place wholesale orders. "
-                "Just send me a message or voice note with what you need and how much. / "
-                "Saya boleh bantu terima pesanan borong. Sila hantar mesej atau nota suara dengan butiran pesanan anda."
-            )
+            # complaint / other — generic fallback
+            lang = _detect_language(raw_text)
+            if lang == "ms":
+                msg = "Helo! Saya boleh bantu terima pesanan borong. Hantar mesej atau nota suara dengan butiran pesanan anda ya 😊"
+            else:
+                msg = "Hi! I can help you place wholesale orders. Just send me a message or voice note with what you need and how much 😊"
         await supabase_service.log_message(
             customer_id=customer.customer_id,
             sender_type="agent",
