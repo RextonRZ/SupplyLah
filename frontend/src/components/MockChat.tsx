@@ -12,7 +12,7 @@ interface ChatMessage {
 const DEMO_PHONE = "+60198765432";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
-export default function MockChat({ merchantId }: { merchantId?: string }) {
+export default function MockChat({ merchantId, onLog }: { merchantId?: string; onLog?: (message: string) => void; }) {
   const resolvedMerchant = merchantId || DEMO_MERCHANT;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -41,6 +41,10 @@ export default function MockChat({ merchantId }: { merchantId?: string }) {
     setMessages((prev) => [...prev, { role: "buyer", text, time: now() }]);
     setLoading(true);
 
+    // Trigger reasoning log
+    onLog?.(`Buyer: "${text}"`);
+    onLog?.(`Intake Agent: Analyzing message for merchant ${resolvedMerchant.slice(0,8)}...`);
+
     try {
       const res = await fetch(`${BACKEND_URL}/webhook/mock-chat`, {
         method: "POST",
@@ -55,12 +59,16 @@ export default function MockChat({ merchantId }: { merchantId?: string }) {
       const data = await res.json();
       const replies: string[] = data.replies ?? (data.reply ? [data.reply] : []);
 
+      onLog?.(`Orchestrator: Routing to GLM-5.1 for response generation...`);
+
       for (let i = 0; i < replies.length; i++) {
         // Brief typing pause between messages so they feel sequential
         if (i > 0) await new Promise((r) => setTimeout(r, 700));
         setMessages((prev) => [...prev, { role: "system", text: replies[i], time: now() }]);
+        onLog?.(`AI Agent: ${replies[i].substring(0, 50)}...`);
       }
     } catch (err) {
+      onLog?.(`System Error: Backend connection failed.`);
       setMessages((prev) => [
         ...prev,
         { role: "system", text: "⚠ Error connecting to backend. Is it running?", time: now() },
@@ -71,9 +79,10 @@ export default function MockChat({ merchantId }: { merchantId?: string }) {
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col h-[480px]">
+    // <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col h-full min-h-[680px]">
+    <div className="bg-white flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="bg-green-600 text-white px-4 py-3 flex items-center gap-3">
+      <div className="bg-green-600 text-white px-5 h-24 py-4 flex items-end gap-3">
         <div className="w-9 h-9 rounded-full bg-green-400 flex items-center justify-center text-lg">
           🏪
         </div>
