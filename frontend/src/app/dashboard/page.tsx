@@ -253,9 +253,9 @@ function ProfileMenu({
 
             {/* Menu items */}
             <div className="py-1.5">
-              {menuItem("", "Store Settings", "settings")}
-              {menuItem("", "Team Members", "team")}
               {menuItem("", "Manage Inventory", "inventory")}
+              {menuItem("", "Team Members", "team")}
+              {menuItem("", "Store Settings", "settings")}
             </div>
 
             {/* Footer */}
