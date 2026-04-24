@@ -245,7 +245,7 @@ export default function MockChat({
         setMessages((prev) => [...prev, { role: "agent", text: replies[i], time: now() }]);
       }
 
-      setVoiceFile((prev) => (prev === "order.m4a" ? "ok.m4a" : "order.m4a"));
+      setVoiceFile("ok.m4a");
     } catch {
       es.close();
       onLog?.("❌ [System] Voice processing failed — is the backend running?");
