@@ -1011,15 +1011,37 @@ async def _handle_new_order(
     # language_detected is unreliable for short Malay messages
     lang = _detect_language(raw_text)
 
-    # For text messages: if no delivery address provided, ask for it before proceeding
+    # For text messages: if no delivery address (or too vague), ask for it before proceeding
     import json as _json_addr
-    has_address = bool(intake.delivery_address and intake.delivery_address.strip())
-    customer_has_address = bool(customer.delivery_address and customer.delivery_address.strip())
+    import re as _re_addr
+
+    def _is_specific_address(addr: str) -> bool:
+        """Return True only if the address looks specific enough for delivery."""
+        if not addr or len(addr.strip()) < 5:
+            return False
+        a = addr.strip().lower()
+        # Must contain a street indicator OR a building number
+        has_street = bool(_re_addr.search(
+            r"\b(jalan|jln|lorong|lrg|street|st|road|rd|avenue|ave|blok|block|"
+            r"no\s*\d|no\.|unit|apt|apartment|taman|tmn|bangunan|plaza|tower)\b", a
+        ))
+        has_number = bool(_re_addr.search(r"\b\d+\b", a))
+        return has_street or has_number
+
+    raw_addr = intake.delivery_address or ""
+    has_address = _is_specific_address(raw_addr)
+    customer_has_address = _is_specific_address(customer.delivery_address or "")
     if message_type == MessageType.TEXT and not has_address and not customer_has_address:
         if lang == "ms":
-            addr_msg = "Terima kasih! Boleh berikan alamat penghantaran anda? 📍"
+            addr_msg = (
+                "Terima kasih! Boleh berikan alamat penghantaran penuh anda? 📍\n"
+                "Contoh: No 12, Jalan Ampang, Kuala Lumpur"
+            )
         else:
-            addr_msg = "Thanks! Could you share your delivery address? 📍"
+            addr_msg = (
+                "Thanks! Could you share your full delivery address? 📍\n"
+                "Example: No 12, Jalan Ampang, Kuala Lumpur"
+            )
         await supabase_service.create_order(
             customer_id=customer.customer_id,
             merchant_id=merchant_id,
