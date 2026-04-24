@@ -10,6 +10,7 @@ interface Props {
 
 const COLUMN_ICONS: Record<string, string> = {
   Pending: "⏳",
+  "Awaiting Substitution": "🔄",
   "Awaiting Confirmation": "💬",
   Confirmed: "✅",
   Dispatched: "🚚",
@@ -17,7 +18,7 @@ const COLUMN_ICONS: Record<string, string> = {
 
 export default function KanbanBoard({ orders, onRefresh }: Props) {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
       {KANBAN_COLUMNS.map((status) => {
         const col = orders.filter((o) => o.order_status === status);
         return (

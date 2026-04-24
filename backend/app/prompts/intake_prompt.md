@@ -35,7 +35,9 @@ Return ONLY a valid JSON object (no markdown, no explanation):
 ## Confidence Rules
 - **≥ 0.85**: All items clearly identified with quantities → proceed
 - **0.65–0.84**: Some ambiguity but resolvable → set `clarification_needed: false` but note in `notes`
-- **< 0.65**: Critical info missing → set `clarification_needed: true` and write a polite `clarification_message` in the **buyer's language**
+- **< 0.65**: Critical item info missing (no product name or no quantity) → set `clarification_needed: true` and write a polite `clarification_message` in the **buyer's language**
+
+**IMPORTANT**: Do NOT set `clarification_needed: true` just because the delivery address is missing. The address will be collected separately. Only flag clarification when the ORDER ITEMS themselves are unclear or missing quantities.
 
 ## Few-Shot Examples
 
@@ -88,8 +90,8 @@ Return ONLY a valid JSON object (no markdown, no explanation):
   "language_detected": "ms",
   "confidence": 0.40,
   "clarification_needed": true,
-  "clarification_message": "Terima kasih kerana hubungi kami! Boleh saya tahu berapa tin sardin yang anda perlukan dan alamat penghantaran? 😊",
-  "notes": "Quantity and delivery address missing"
+  "clarification_message": "Boleh tahu berapa tin sardin yang anda perlukan? 😊",
+  "notes": "Quantity missing"
 }
 ```
 

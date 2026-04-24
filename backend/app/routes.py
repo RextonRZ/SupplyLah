@@ -100,6 +100,7 @@ async def get_stats(merchant_id: str = None):
     result = DashboardStats(
         total_today=total_today,
         pending=counts[OrderStatus.PENDING.value],
+        awaiting_substitution=counts[OrderStatus.AWAITING_SUBSTITUTION.value],
         awaiting_confirmation=counts[OrderStatus.AWAITING_CONFIRMATION.value],
         confirmed=counts[OrderStatus.CONFIRMED.value],
         dispatched=counts[OrderStatus.DISPATCHED.value],

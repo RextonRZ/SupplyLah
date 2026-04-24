@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 class OrderStatus(str, Enum):
     PENDING = "Pending"
+    AWAITING_SUBSTITUTION = "Awaiting Substitution"
     AWAITING_CONFIRMATION = "Awaiting Confirmation"
     CONFIRMED = "Confirmed"
     DISPATCHED = "Dispatched"
@@ -72,11 +73,13 @@ class IntakeResult(BaseModel):
 class ResolvedOrderItem(BaseModel):
     product_id: str
     product_name: str
+    original_product_name: Optional[str] = None  # set when is_substituted=True
     requested_qty: int
     fulfilled_qty: int
     unit_price: float
     line_total: float
     is_substituted: bool = False
+    discount_pct: Optional[float] = None          # discount % offered for substitution
     substitute_reason: Optional[str] = None
 
 
@@ -157,6 +160,7 @@ class OrderDetail(BaseModel):
 class DashboardStats(BaseModel):
     total_today: int
     pending: int
+    awaiting_substitution: int
     awaiting_confirmation: int
     confirmed: int
     dispatched: int

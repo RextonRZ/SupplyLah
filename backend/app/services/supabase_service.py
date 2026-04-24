@@ -77,6 +77,23 @@ async def get_pending_order(customer_id: str) -> Optional[OrderRow]:
     return None
 
 
+async def get_substitution_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Awaiting Substitution order for this customer, if any."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.AWAITING_SUBSTITUTION.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return OrderRow(**result.data[0])
+    return None
+
+
 async def create_order(
     customer_id: str,
     merchant_id: str,

@@ -19,11 +19,13 @@ Return ONLY a valid JSON object:
     {
       "product_id": "uuid-here",
       "product_name": "Minyak Masak 5L",
+      "original_product_name": null,
       "requested_qty": 3,
       "fulfilled_qty": 3,
       "unit_price": 25.90,
       "line_total": 77.70,
       "is_substituted": false,
+      "discount_pct": null,
       "substitute_reason": null
     }
   ],
@@ -36,6 +38,8 @@ Return ONLY a valid JSON object:
   "notes": null
 }
 ```
+
+When `is_substituted` is true, set `original_product_name` to the product the buyer originally asked for, and `discount_pct` to the substitution discount percentage (e.g. 10 for 10% off).
 
 ## Substitution Rules
 - Only propose ONE level of substitution (MVP constraint)

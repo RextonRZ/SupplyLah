@@ -1,5 +1,6 @@
 export type OrderStatus =
   | "Pending"
+  | "Awaiting Substitution"
   | "Awaiting Confirmation"
   | "Confirmed"
   | "Dispatched"
@@ -47,6 +48,7 @@ export interface Product {
 export interface DashboardStats {
   total_today: number;
   pending: number;
+  awaiting_substitution: number;
   awaiting_confirmation: number;
   confirmed: number;
   dispatched: number;
@@ -56,6 +58,7 @@ export interface DashboardStats {
 
 export const STATUS_COLORS: Record<OrderStatus, string> = {
   Pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  "Awaiting Substitution": "bg-orange-100 text-orange-800 border-orange-200",
   "Awaiting Confirmation": "bg-blue-100 text-blue-800 border-blue-200",
   Confirmed: "bg-green-100 text-green-800 border-green-200",
   Dispatched: "bg-purple-100 text-purple-800 border-purple-200",
@@ -65,6 +68,7 @@ export const STATUS_COLORS: Record<OrderStatus, string> = {
 
 export const KANBAN_COLUMNS: OrderStatus[] = [
   "Pending",
+  "Awaiting Substitution",
   "Awaiting Confirmation",
   "Confirmed",
   "Dispatched",

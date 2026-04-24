@@ -1307,6 +1307,7 @@ export default function Dashboard() {
         setStats({
           total_today: 0,
           pending: 0,
+          awaiting_substitution: 0,
           awaiting_confirmation: 0,
           confirmed: 0,
           dispatched: 0,
