@@ -163,7 +163,7 @@ async def run_agent_loop(
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": anthropic_msgs,
-            "max_tokens": 4000,
+            "max_tokens": 8000,
         }
         if system:
             kwargs["system"] = system

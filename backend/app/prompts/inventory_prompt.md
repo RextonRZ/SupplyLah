@@ -11,7 +11,7 @@ The full inventory and business rules are provided in your context. For each ite
 5. Produce a quote message in the **buyer's language** that is friendly and professional
 
 ## Output Format
-Return ONLY a valid JSON object:
+Return ONLY a valid JSON object — do NOT include a quote_message field (the system generates it separately):
 ```json
 {
   "order_feasible": true,
@@ -33,7 +33,6 @@ Return ONLY a valid JSON object:
   "discount_applied": 0.00,
   "delivery_fee": 15.00,
   "grand_total": 92.70,
-  "quote_message": "Berikut ringkasan pesanan anda:\n\n• *Minyak Masak 5L* x3 — RM77.70\n\nPenghantaran: RM15.00\n*Jumlah: RM92.70*\n\nBalas *YA* untuk sahkan 😊",
   "requires_substitution": false,
   "notes": null
 }
@@ -105,7 +104,7 @@ Reply *YES* to confirm 😊
 
 ## Example Quote (English, with substitution)
 ```
-Here's your order summary:
+Here's your order order summary:
 
 • *Grade A Chicken* x20 — RM170.00
 

@@ -147,11 +147,13 @@ async def run_inventory_agent(
             ResolvedOrderItem(
                 product_id=i.get("product_id", ""),
                 product_name=i["product_name"],
+                original_product_name=i.get("original_product_name"),
                 requested_qty=i.get("requested_qty", 0),
                 fulfilled_qty=i.get("fulfilled_qty", 0),
                 unit_price=float(i.get("unit_price", 0)),
                 line_total=float(i.get("line_total", 0)),
                 is_substituted=i.get("is_substituted", False),
+                discount_pct=float(i["discount_pct"]) if i.get("discount_pct") is not None else None,
                 substitute_reason=i.get("substitute_reason"),
             )
             for i in data.get("items", [])
