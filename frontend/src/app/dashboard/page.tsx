@@ -346,15 +346,13 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
 
   async function invite() {
     if (!email || !phone) return;
-    await supabase
-      .from("merchant_users")
-      .insert({
-        merchant_id: merchantId,
-        invited_email: email,
-        contact_number: phone,
-        role,
-        status: "invited",
-      });
+    await supabase.from("merchant_users").insert({
+      merchant_id: merchantId,
+      invited_email: email,
+      contact_number: phone,
+      role,
+      status: "invited",
+    });
     setEmail("");
     setPhone("");
     fetchTeam();
@@ -1253,6 +1251,7 @@ export default function Dashboard() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
   const [aiLogs, setAiLogs] = useState<{ t: string; m: string }[]>([]);
+  const [mockChatInstanceKey, setMockChatInstanceKey] = useState(0); // New state for MockChat key
 
   /* Resolve auth + merchant, THEN set merchantId to trigger fetch */
   useEffect(() => {
@@ -1393,6 +1392,21 @@ export default function Dashboard() {
       [...prev, { t: new Date().toLocaleTimeString(), m }].slice(-50),
     );
   };
+
+  const clearAiLogs = useCallback(() => {
+    // Memoize clearAiLogs
+    setAiLogs([]);
+  }, []);
+
+  // Effect to handle tab changes and force MockChat re-mount/reset logs
+  useEffect(() => {
+    if (activeTab === "demo") {
+      setMockChatInstanceKey((prevKey) => prevKey + 1); // Increment key to force MockChat remount
+      clearAiLogs(); // Clear logs when entering demo tab
+    } else {
+      clearAiLogs(); // Clear logs when leaving demo tab
+    }
+  }, [activeTab, clearAiLogs]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1606,8 +1620,10 @@ export default function Dashboard() {
                 {/* The "Screen" area - Locked to the frame edges */}
                 <div className="absolute top-[2.2%] left-[6.6%] right-[6.6%] bottom-[2.2%] z-10 overflow-hidden rounded-[2.6rem] bg-[#e5ddd5]">
                   <MockChat
+                    key={mockChatInstanceKey}
                     merchantId={merchantId ?? DEMO_MERCHANT_ID}
                     onLog={addLog}
+                    onClearLogs={clearAiLogs}
                   />
                 </div>
               </div>
@@ -1620,7 +1636,7 @@ export default function Dashboard() {
                     Pipeline
                   </h3>
                   <button
-                    onClick={() => setAiLogs([])}
+                    onClick={() => clearAiLogs}
                     className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
                   >
                     Clear

@@ -25,7 +25,8 @@ from app.models.schemas import (
 )
 from app.services import supabase_service, twilio_service
 from app.services.glm_client import describe_image, transcribe_audio
-from app.services.s3_service import upload_media
+from app.services.s3_service import upload_media, generate_presigned_url 
+from app.services.transcription_service import transcribe_audio_from_url
 from app.services.twilio_service import download_twilio_media
 
 logger = logging.getLogger(__name__)
@@ -149,11 +150,20 @@ async def _resolve_to_text(
     media_bytes = await download_twilio_media(media_url)
 
     if message_type == MessageType.AUDIO:
-        await upload_media(media_bytes, "audio/ogg", f"audio/{hash(media_url)}.ogg")
-        transcript = await transcribe_audio(media_bytes)
-        logger.info("Audio transcribed: %s...", transcript[:100])
+        # 1. Upload to S3
+        key = f"audio/{hash(media_url)}.ogg"
+        await upload_media(media_bytes, "audio/ogg", key)
+        
+        # 2. Generate pre-signed URL for the transcription service
+        presigned_url = await generate_presigned_url(key)
+        
+        # 3. Call Groq Whisper via our service
+        result = await transcribe_audio_from_url(presigned_url, "audio/ogg")
+        transcript = result["transcript"]
+        
+        logger.info("Audio transcribed via Groq: %s", transcript[:100])
         return transcript
-
+    
     if message_type == MessageType.IMAGE:
         s3_url = await upload_media(media_bytes, "image/jpeg", f"images/{hash(media_url)}.jpg")
         extracted = await describe_image(

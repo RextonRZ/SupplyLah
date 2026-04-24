@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     use_mock_whatsapp: bool = True
     use_mock_lalamove: bool = True
     use_mock_sheets: bool = True
+    
+    # Groq
+    groq_api_key: str = ""
 
 
 @lru_cache
