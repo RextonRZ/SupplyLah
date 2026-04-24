@@ -103,6 +103,7 @@ async def run_intake_agent(
             confidence=float(data.get("confidence", 0.5)),
             clarification_needed=data.get("clarification_needed", False),
             clarification_message=data.get("clarification_message"),
+            references_previous_order=data.get("references_previous_order", False),
             notes=data.get("notes"),
         )
 

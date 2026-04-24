@@ -67,6 +67,7 @@ class IntakeResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     clarification_needed: bool = False
     clarification_message: Optional[str] = None
+    references_previous_order: bool = Field(default=False, description="True if buyer references a past order (e.g. 'same as yesterday', 'macam semalam')")
     notes: Optional[str] = None
 
 

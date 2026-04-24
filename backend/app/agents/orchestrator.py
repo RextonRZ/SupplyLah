@@ -437,6 +437,315 @@ async def _handle_inquiry(
 
 
 # ─────────────────────────────────────────
+# Previous order reference handler
+# ─────────────────────────────────────────
+
+async def _handle_previous_order_reference(
+    raw_text: str,
+    customer: CustomerRow,
+    merchant_id: str,
+    lang: str,
+) -> str:
+    """Handle when buyer references a past order (e.g. 'same as yesterday')."""
+    import json as _json
+
+    emit("🔄 [Orchestrator] Buyer references previous order — fetching last order...")
+    last_order = await supabase_service.get_last_confirmed_order(customer.customer_id)
+
+    if not last_order or not last_order.get("order_item"):
+        if lang == "ms":
+            msg = "Maaf, saya tidak jumpa rekod pesanan lepas anda. Boleh nyatakan semula item yang anda mahu pesan? 😊"
+        else:
+            msg = "Sorry, I couldn't find your previous order. Could you please list the items you'd like to order? 😊"
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
+
+    items = last_order["order_item"]
+    item_lines = "\n".join(
+        f"• *{it['product_name']}* — {it['quantity']} unit" for it in items
+    )
+
+    # Detect vague quantity modifiers (e.g. "lebih sikit", "more", "tambah")
+    _MORE_KEYWORDS = {"lebih", "tambah", "more", "extra", "sikit", "banyak", "kurang", "less"}
+    raw_lower = set(raw_text.lower().split())
+    has_vague_modifier = bool(raw_lower & _MORE_KEYWORDS)
+
+    # Save a Pending order with repeat_order metadata so we can intercept the buyer's reply
+    order = await supabase_service.create_order(
+        customer_id=customer.customer_id,
+        merchant_id=merchant_id,
+        order_amount=0,
+        order_notes=_json.dumps({
+            "repeat_order": True,
+            "previous_items": items,
+            "has_vague_modifier": has_vague_modifier,
+            "language": lang,
+        }),
+        confidence_score=0.8,
+        requires_human_review=False,
+        status=OrderStatus.PENDING,
+    )
+
+    if lang == "ms":
+        if has_vague_modifier:
+            msg = (
+                f"Helo {customer.customer_name or ''}! Saya nampak anda mahu buat pesanan macam sebelumnya.\n\n"
+                f"Pesanan lepas anda:\n{item_lines}\n\n"
+                f"Boleh nyatakan item mana dan berapa banyak yang anda mahu ubah? 😊"
+            )
+        else:
+            msg = (
+                f"Helo {customer.customer_name or ''}! Saya nampak anda mahu repeat pesanan lepas.\n\n"
+                f"Pesanan lepas anda:\n{item_lines}\n\n"
+                f"Setuju untuk order sekali lagi dengan kuantiti yang sama? Balas *YA* atau *TIDAK*."
+            )
+    else:
+        if has_vague_modifier:
+            msg = (
+                f"Hey {customer.customer_name or ''}! Looks like you'd like to reorder with some changes.\n\n"
+                f"Your last order:\n{item_lines}\n\n"
+                f"Could you let me know which items and how much more you'd like? 😊"
+            )
+        else:
+            msg = (
+                f"Hey {customer.customer_name or ''}! Looks like you'd like to repeat your previous order.\n\n"
+                f"Your last order:\n{item_lines}\n\n"
+                f"Shall I go ahead with the same quantities? Reply *YES* or *NO*."
+            )
+
+    emit("📋 [Orchestrator] Asked buyer to confirm/refine previous order")
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=msg,
+    )
+    return msg
+
+
+async def _handle_repeat_order_reply(
+    raw_text: str,
+    repeat_order: OrderRow,
+    customer: CustomerRow,
+    merchant_id: str,
+) -> str:
+    """Handle buyer's reply after being asked about their repeat order.
+
+    Three scenarios:
+    1. Vague modifier was flagged + buyer specifies changes → merge & run inventory
+    2. No modifier + buyer says YES → run inventory with previous items as-is
+    3. Buyer says NO → cancel
+    """
+    import json as _json
+
+    try:
+        notes_data = _json.loads(repeat_order.order_notes or "{}")
+    except Exception:
+        notes_data = {}
+
+    previous_items = notes_data.get("previous_items", [])
+    has_vague_modifier = notes_data.get("has_vague_modifier", False)
+    language = notes_data.get("language", "ms")
+    lang = language or _detect_language(raw_text)
+
+    # If no vague modifier, treat as a YES/NO confirmation
+    if not has_vague_modifier:
+        decision = _is_confirmation(raw_text)
+        if decision is None:
+            if lang == "ms":
+                return "Maaf, saya tidak faham. Balas *YA* untuk sahkan atau *TIDAK* untuk batal."
+            return "Sorry, I didn't catch that. Reply *YES* to confirm or *NO* to cancel."
+        if decision is False:
+            await supabase_service.update_order_status(repeat_order.order_id, OrderStatus.EXPIRED)
+            if lang == "ms":
+                msg = "Ok, pesanan dibatalkan. Boleh buat pesanan baru bila-bila masa! 😊"
+            else:
+                msg = "Ok, order cancelled. Feel free to place a new order anytime! 😊"
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=repeat_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg,
+            )
+            return msg
+        # YES — proceed with previous items as-is
+        merged_items = previous_items
+    else:
+        # Buyer is specifying modifications — use LLM to merge their reply with previous items
+        merged_items = await _merge_repeat_modifications(raw_text, previous_items)
+
+    if not merged_items:
+        if lang == "ms":
+            msg = "Maaf, saya tidak faham perubahan yang anda mahu. Boleh nyatakan semula? 😊"
+        else:
+            msg = "Sorry, I couldn't understand your changes. Could you try again? 😊"
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=repeat_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
+
+    # Build IntakeResult from merged items and run inventory agent
+    from app.models.schemas import IntakeResult, OrderLineItem
+    intake = IntakeResult(
+        intent="order",
+        items=[
+            OrderLineItem(product_name=it["product_name"], quantity=it["quantity"], unit=it.get("unit"))
+            for it in merged_items
+        ],
+        language_detected=lang,
+        confidence=0.85,
+    )
+
+    # Notify customer we're checking stock
+    ack_stock_msg = _ack_checking_stock(lang, intake.items)
+    await _send_intermediate(customer, ack_stock_msg)
+
+    emit(f"📦 [InventoryAgent] Checking stock for {len(intake.items)} item(s) (repeat order)...")
+    inventory = await run_inventory_agent(intake, merchant_id, lang)
+
+    if not inventory.order_feasible or not inventory.items:
+        fallback = inventory.quote_message or (
+            "Maaf, kami tidak dapat memproses pesanan ini sekarang. / "
+            "Sorry, we couldn't process this order right now."
+        )
+        await supabase_service.update_order_status(repeat_order.order_id, OrderStatus.EXPIRED)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=fallback,
+        )
+        return fallback
+
+    # Handle substitution if needed
+    sub_items = [i for i in inventory.items if i.is_substituted]
+    if sub_items:
+        await supabase_service.update_order_status(
+            repeat_order.order_id,
+            OrderStatus.AWAITING_SUBSTITUTION,
+            order_notes=_json.dumps({
+                "inventory_result": inventory.model_dump(),
+                "intake_result": intake.model_dump(),
+                "delivery_address": customer.delivery_address or "",
+                "language": lang,
+            }),
+        )
+        question = _build_substitution_question(lang, sub_items)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=repeat_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=question,
+        )
+        return question
+
+    # No substitutions — update order and generate quote
+    await supabase_service.update_order_status(
+        repeat_order.order_id,
+        OrderStatus.AWAITING_CONFIRMATION,
+        order_notes=_json.dumps({
+            "inventory_result": inventory.model_dump(),
+            "intake_result": intake.model_dump(),
+            "delivery_address": customer.delivery_address or "",
+            "language": lang,
+        }),
+        order_amount=inventory.grand_total,
+        confidence_score=intake.confidence,
+    )
+
+    await supabase_service.create_order_items(
+        repeat_order.order_id,
+        [
+            {
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": item.fulfilled_qty,
+                "unit_price": item.unit_price,
+                "is_substituted": item.is_substituted,
+            }
+            for item in inventory.items
+        ],
+    )
+
+    quote_msg = _build_quote_message(lang, inventory)
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=repeat_order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=quote_msg,
+    )
+    emit(f"✅ [DB] Repeat order {repeat_order.order_id[:8]}... saved — status: Awaiting Confirmation")
+    return quote_msg
+
+
+async def _merge_repeat_modifications(
+    raw_text: str,
+    previous_items: list[dict],
+) -> list[dict]:
+    """Use LLM to merge buyer's modifications with previous order items.
+
+    Returns a list of dicts with product_name and quantity.
+    """
+    import json as _json
+    from app.services.glm_client import run_agent_loop
+    settings = get_settings()
+
+    prev_summary = "\n".join(
+        f"- {it['product_name']}: {it['quantity']} unit" for it in previous_items
+    )
+
+    system = (
+        "You are an order modification assistant. The buyer previously ordered:\n"
+        f"{prev_summary}\n\n"
+        "Now they want to modify their order. Parse their message and output the FULL updated item list "
+        "as a JSON array. Each item must have 'product_name' (exact same name as before) and 'quantity' (integer). "
+        "If they say 'sama je' / 'same' / 'lain sama' for an item, keep the original quantity. "
+        "If they say 'tambah X' / 'add X' / 'X more', add X to the original quantity. "
+        "If they say 'kurang X' / 'X less', subtract X. "
+        "Only include items that should remain in the order. "
+        "Output ONLY the JSON array, no other text."
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": raw_text},
+    ]
+
+    try:
+        import re as _re
+        raw_output = await run_agent_loop(
+            model=settings.model_reasoning,
+            messages=messages,
+            tools=[],
+            tool_executors={},
+        )
+        raw_output = raw_output.strip()
+        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+        if fence_match:
+            raw_output = fence_match.group(1).strip()
+        items = _json.loads(raw_output)
+        if isinstance(items, list) and all("product_name" in i and "quantity" in i for i in items):
+            return items
+        return []
+    except Exception as exc:
+        logger.error("Merge repeat modifications error: %s", exc)
+        return []
+
+
+# ─────────────────────────────────────────
 # Core orchestration handlers
 # ─────────────────────────────────────────
 
@@ -484,6 +793,12 @@ async def _handle_new_order(
             message_type="text",
             content=msg,
         )
+        return msg
+
+    # Buyer references a previous order — fetch last order and ask for confirmation
+    if intake.references_previous_order:
+        lang = _detect_language(raw_text)
+        msg = await _handle_previous_order_reference(raw_text, customer, merchant_id, lang)
         return msg
 
     # Low confidence → ask for clarification
@@ -682,6 +997,10 @@ async def _handle_confirmation_reply(
             content=logistics.confirmation_message,
         )
         await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
+        emit_message(logistics.confirmation_message)
+        collector = _msg_collector.get()
+        if collector is not None:
+            collector.append(logistics.confirmation_message)
 
     _inventory_queue.put_nowait(_do_logistics())
     ensure_inventory_worker()
@@ -731,10 +1050,15 @@ async def handle_incoming_message(
 
     # 3. Route based on current conversation state
     emit("📋 [State] Checking conversation state...")
+    repeat_order = await supabase_service.get_repeat_pending_order(customer.customer_id)
     sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
 
-    if sub_order:
+    if repeat_order:
+        emit(f"📋 [State] Awaiting repeat order clarification — order {repeat_order.order_id[:8]}...")
+        raw_text = await _resolve_to_text(message_type, text_content, media_url)
+        final = await _handle_repeat_order_reply(raw_text, repeat_order, customer, merchant_id)
+    elif sub_order:
         emit(f"📋 [State] Awaiting substitution reply — order {sub_order.order_id[:8]}...")
         raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_substitution_reply(raw_text, sub_order, customer)

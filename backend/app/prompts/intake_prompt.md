@@ -32,9 +32,19 @@ Return ONLY a valid JSON object (no markdown, no explanation):
   "confidence": 0.92,
   "clarification_needed": false,
   "clarification_message": null,
+  "references_previous_order": false,
   "notes": "Customer seems to be a regular buyer based on tone"
 }
 ```
+
+## Previous Order References
+Set `references_previous_order` to `true` when the buyer's message references a past order instead of specifying items directly. Examples:
+- "sama macam semalam" / "same as yesterday" / "macam biasa" / "like last time"
+- "repeat order" / "order yang sama" / "macam hari tu"
+- "sama macam semalam la tapi lebih sikit" / "same as last time but more"
+- "lagi satu macam tu" / "another one like that"
+
+When `references_previous_order` is true, leave `items` as an empty list — the system will fetch the previous order and ask the buyer for confirmation.
 
 ## Confidence Rules
 - **≥ 0.85**: All items clearly identified with quantities → proceed
@@ -128,6 +138,40 @@ Return ONLY a valid JSON object (no markdown, no explanation):
   "clarification_needed": false,
   "clarification_message": null,
   "notes": "Customer asking about discount rules"
+}
+```
+
+**Example 6 — Previous order reference**
+> "sama macam semalam la tapi lebih sikit"
+
+```json
+{
+  "intent": "order",
+  "items": [],
+  "delivery_address": null,
+  "language_detected": "ms",
+  "confidence": 0.80,
+  "clarification_needed": false,
+  "clarification_message": null,
+  "references_previous_order": true,
+  "notes": "Buyer referencing previous order with vague quantity change"
+}
+```
+
+**Example 7 — Previous order reference (English)**
+> "same as yesterday"
+
+```json
+{
+  "intent": "order",
+  "items": [],
+  "delivery_address": null,
+  "language_detected": "en",
+  "confidence": 0.85,
+  "clarification_needed": false,
+  "clarification_message": null,
+  "references_previous_order": true,
+  "notes": "Buyer wants to repeat last order"
 }
 ```
 
