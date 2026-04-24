@@ -114,24 +114,29 @@ async def run_inventory_agent(
     ]
 
     try:
-        raw_output = await run_agent_loop(
-            model=settings.model_reasoning,
-            messages=messages,
-            tools=[],
-            tool_executors={},
-        )
-
-        raw_output = raw_output.strip()
-
-        # Strip any markdown code fences the model may have added
-        import re as _re
-        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
-        if fence_match:
-            raw_output = fence_match.group(1).strip()
-        elif raw_output.startswith("```"):
-            raw_output = raw_output.strip("`").strip()
-            if raw_output.startswith("json"):
-                raw_output = raw_output[4:].strip()
+        raw_output = ""
+        for attempt in range(2):
+            raw_output = await run_agent_loop(
+                model=settings.model_reasoning,
+                messages=messages,
+                tools=[],
+                tool_executors={},
+            )
+            raw_output = raw_output.strip()
+            # Strip any markdown code fences the model may have added
+            import re as _re
+            fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+            if fence_match:
+                raw_output = fence_match.group(1).strip()
+            elif raw_output.startswith("```"):
+                raw_output = raw_output.strip("`").strip()
+                if raw_output.startswith("json"):
+                    raw_output = raw_output[4:].strip()
+            if raw_output:
+                break
+            logger.warning("Inventory agent got empty response (attempt %d/2), retrying...", attempt + 1)
+            emit(f"⚠️ [InventoryAgent] Empty AI response, retrying... ({attempt + 1}/2)")
+            await asyncio.sleep(5)
 
         if not raw_output:
             raise json.JSONDecodeError("Empty response from model", "", 0)
@@ -142,11 +147,13 @@ async def run_inventory_agent(
             ResolvedOrderItem(
                 product_id=i.get("product_id", ""),
                 product_name=i["product_name"],
+                original_product_name=i.get("original_product_name"),
                 requested_qty=i.get("requested_qty", 0),
                 fulfilled_qty=i.get("fulfilled_qty", 0),
                 unit_price=float(i.get("unit_price", 0)),
                 line_total=float(i.get("line_total", 0)),
                 is_substituted=i.get("is_substituted", False),
+                discount_pct=float(i["discount_pct"]) if i.get("discount_pct") is not None else None,
                 substitute_reason=i.get("substitute_reason"),
             )
             for i in data.get("items", [])
