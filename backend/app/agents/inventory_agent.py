@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.models.schemas import IntakeResult, InventoryResult, ResolvedOrderItem
 from app.services import supabase_service
 from app.services.glm_client import run_agent_loop
+from app.services.log_stream import emit
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,34 @@ async def run_inventory_agent(
         supabase_service.get_products(merchant_id),
         supabase_service.get_knowledge_base_rules(merchant_id),
     )
+
+    # Per-item stock pre-check against live DB — emitted to SSE before LLM call
+    def _match_product(name: str):
+        nl = name.lower()
+        for p in products:
+            if nl in p.product_name.lower() or p.product_name.lower() in nl:
+                return p
+            if any(nl in a.lower() or a.lower() in nl for a in (p.slang_aliases or [])):
+                return p
+        return None
+
+    for item in intake_result.items:
+        matched = _match_product(item.product_name)
+        if matched:
+            if matched.stock_quantity >= item.quantity:
+                emit(
+                    f"✅ [Stock] {matched.product_name}: "
+                    f"need {item.quantity}, have {matched.stock_quantity} — sufficient"
+                )
+            else:
+                emit(
+                    f"⚠️  [Stock] {matched.product_name}: "
+                    f"need {item.quantity}, have {matched.stock_quantity} — LOW STOCK"
+                )
+        else:
+            emit(f"❓ [Stock] {item.product_name}: not found in catalogue — AI will resolve")
+
+    emit("🤖 [InventoryAgent] Calling AI model to generate quote...")
 
     inventory_json = json.dumps(
         [
@@ -93,10 +122,19 @@ async def run_inventory_agent(
         )
 
         raw_output = raw_output.strip()
-        if raw_output.startswith("```"):
-            raw_output = raw_output.split("```")[1]
+
+        # Strip any markdown code fences the model may have added
+        import re as _re
+        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+        if fence_match:
+            raw_output = fence_match.group(1).strip()
+        elif raw_output.startswith("```"):
+            raw_output = raw_output.strip("`").strip()
             if raw_output.startswith("json"):
-                raw_output = raw_output[4:]
+                raw_output = raw_output[4:].strip()
+
+        if not raw_output:
+            raise json.JSONDecodeError("Empty response from model", "", 0)
 
         data = json.loads(raw_output)
 
@@ -143,6 +181,9 @@ async def run_inventory_agent(
             items=[],
             total_amount=0,
             grand_total=0,
-            quote_message="System error while checking inventory. Our team has been notified.",
+            quote_message=(
+                "Maaf, sistem kami sibuk sekarang 🙏 Sila cuba hantar semula pesanan anda dalam seminit. / "
+                "Sorry, our system is busy right now 🙏 Please resend your order in a minute."
+            ),
             notes=str(exc),
         )

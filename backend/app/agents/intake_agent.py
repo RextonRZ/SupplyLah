@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.models.schemas import IntakeResult, OrderLineItem
 from app.services import supabase_service
 from app.services.glm_client import run_agent_loop
+from app.services.log_stream import emit
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,9 @@ async def run_intake_agent(
     system_prompt = _load_system_prompt()
 
     # Fetch catalog once; inject into context instead of tool-call round trips
+    emit("📦 [IntakeAgent] Loading product catalogue from database...")
     products = await supabase_service.get_products(merchant_id)
+    emit(f"📦 [IntakeAgent] Catalogue loaded — {len(products)} products, aliases mapped")
     catalog = json.dumps(
         [
             {
@@ -60,18 +63,26 @@ async def run_intake_agent(
     ]
 
     try:
+        emit(f"🤖 [IntakeAgent] Calling AI model ({settings.model_reasoning})...")
         raw_output = await run_agent_loop(
             model=settings.model_reasoning,
             messages=messages,
             tools=[],
             tool_executors={},
         )
-        # Strip markdown fences if the model adds them
+        emit("✅ [IntakeAgent] AI model responded — parsing output...")
+        import re as _re
         raw_output = raw_output.strip()
-        if raw_output.startswith("```"):
-            raw_output = raw_output.split("```")[1]
+        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+        if fence_match:
+            raw_output = fence_match.group(1).strip()
+        elif raw_output.startswith("```"):
+            raw_output = raw_output.strip("`").strip()
             if raw_output.startswith("json"):
-                raw_output = raw_output[4:]
+                raw_output = raw_output[4:].strip()
+
+        if not raw_output:
+            raise json.JSONDecodeError("Empty response from model", "", 0)
 
         data = json.loads(raw_output)
 
@@ -92,6 +103,7 @@ async def run_intake_agent(
             confidence=float(data.get("confidence", 0.5)),
             clarification_needed=data.get("clarification_needed", False),
             clarification_message=data.get("clarification_message"),
+            references_previous_order=data.get("references_previous_order", False),
             notes=data.get("notes"),
         )
 

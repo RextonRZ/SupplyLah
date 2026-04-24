@@ -20,7 +20,8 @@ def _build_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(
         api_key=settings.ilmu_api_key,
         base_url=settings.ilmu_base_url,
-        timeout=60.0,
+        timeout=120.0,
+        max_retries=0,  # don't silently retry on timeout — fail fast after 60s
     )
 
 
@@ -162,22 +163,23 @@ async def run_agent_loop(
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": anthropic_msgs,
-            "max_tokens": 4096,
+            "max_tokens": 4000,
         }
         if system:
             kwargs["system"] = system
         if anthropic_tools:
             kwargs["tools"] = anthropic_tools
 
-        # Retry up to 2 extra times on transient 502/503 server errors
-        for attempt in range(3):
+        # Retry once on transient 5xx errors with a meaningful backoff.
+        # ilmu.ai 504s suggest retry_after=120 but we cap at 20s for demo responsiveness.
+        for attempt in range(2):
             try:
                 response = await client.messages.create(**kwargs)
                 break
             except anthropic.InternalServerError as exc:
-                if attempt < 2:
-                    logger.warning("ilmu.ai transient error (attempt %d/3): %s — retrying", attempt + 1, exc)
-                    await asyncio.sleep(2 ** attempt)  # 1s, 2s
+                if attempt < 1:
+                    logger.warning("ilmu.ai transient error (attempt %d/2): %s — retrying in 15s", attempt + 1, exc)
+                    await asyncio.sleep(15)
                 else:
                     raise
 

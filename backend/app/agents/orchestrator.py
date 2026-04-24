@@ -2,7 +2,10 @@
 
 Flow:
   Incoming message → lookup customer → check pending order state →
-    NEW: immediate ack → Intake → "checking stock" → Inventory → save quote → Awaiting Confirmation
+    NEW: immediate ack → Intake → "checking stock" → Inventory →
+      if substitution needed → Awaiting Substitution → ask buyer → YES/NO → quote
+      no substitution → save quote → Awaiting Confirmation
+    AWAITING SUBSTITUTION: detect YES/NO → generate quote → Awaiting Confirmation | Expire
     AWAITING CONFIRMATION: detect YES/NO → Logistics | Expire
 """
 from __future__ import annotations
@@ -22,8 +25,10 @@ from app.models.schemas import (
     MessageType,
     OrderRow,
     OrderStatus,
+    ResolvedOrderItem,
 )
 from app.services import supabase_service, twilio_service
+from app.services.log_stream import emit, emit_message
 from app.services.glm_client import describe_image, transcribe_audio
 from app.services.s3_service import upload_media, generate_presigned_url 
 from app.services.transcription_service import transcribe_audio_from_url
@@ -71,15 +76,32 @@ def ensure_inventory_worker() -> None:
 # ─────────────────────────────────────────
 
 _MS_PARTICLES = {
-    "nak", "minta", "boleh", "hantar", "bagi", "saya", "kami", "boss", "lah",
-    "la", "ya", "tolong", "barang", "kg", "botol", "beg", "kotak", "unit",
-    "order", "pesanan", "stok", "harga",
+    "nak", "nk", "minta", "boleh", "hantar", "bagi", "saya", "kami", "boss",
+    "lah", "la", "ya", "yea", "tolong", "barang", "kg", "botol", "beg",
+    "kotak", "unit", "order", "pesanan", "stok", "harga", "jap", "ok",
+    "ni", "tu", "dengan", "untuk", "dan", "ke", "dari", "ekor", "biji",
+    "sahaja", "je", "je", "dah", "tak", "tahu", "tau", "faham", "betul",
+    "terima", "kasih", "maaf", "selamat", "jalan", "taman", "lorong",
+}
+
+# English-only markers — if any appear, lean English
+_EN_MARKERS = {
+    "please", "want", "need", "send", "deliver", "thank", "hello", "hi",
+    "yes", "no", "cancel", "confirm", "address", "total", "price", "how",
 }
 
 
 def _detect_language(text: str) -> str:
     words = set(text.lower().split())
-    return "ms" if words & _MS_PARTICLES else "en"
+    ms_hits = len(words & _MS_PARTICLES)
+    en_hits = len(words & _EN_MARKERS)
+    if ms_hits > en_hits:
+        return "ms"
+    if en_hits > ms_hits:
+        return "en"
+    # Ambiguous (short messages like "60", "YA", numbers, addresses) —
+    # default to Malay since this is a Malaysian wholesale platform
+    return "ms"
 
 
 def _ack_received(msg_type: MessageType, lang: str) -> str:
@@ -90,10 +112,11 @@ def _ack_received(msg_type: MessageType, lang: str) -> str:
     return "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..." if lang == "ms" else "On it! 🔍 Processing your order, give me a sec..."
 
 
-def _ack_checking_stock(lang: str, items_preview: str) -> str:
+def _ack_checking_stock(lang: str, items: list) -> str:
+    bullets = "\n".join(f"• *{i.product_name}* x{i.quantity}" for i in items)
     if lang == "ms":
-        return f"Ok faham! *{items_preview}* — tengah semak stok sekarang 📦"
-    return f"Got it! Checking stock for *{items_preview}* now... 📦"
+        return f"Ok faham! Tengah semak stok sekarang 📦\n\n{bullets}"
+    return f"Got it! Checking stock now 📦\n\n{bullets}"
 
 
 async def _send_intermediate(
@@ -113,6 +136,174 @@ async def _send_intermediate(
     collector = _msg_collector.get()
     if collector is not None:
         collector.append(message)
+    emit_message(message)  # stream to demo chat immediately via SSE
+
+
+# ─────────────────────────────────────────
+# Substitution ask & reply helpers
+# ─────────────────────────────────────────
+
+def _build_substitution_question(lang: str, sub_items: list[ResolvedOrderItem]) -> str:
+    """Format a clear substitution proposal for the buyer."""
+    if lang == "ms":
+        if len(sub_items) == 1:
+            s = sub_items[0]
+            orig = s.original_product_name or s.product_name
+            disc = f" pada diskaun *{s.discount_pct:.0f}%*" if s.discount_pct else ""
+            return (
+                f"Maaf, stok *{orig}* tidak mencukupi.\n\n"
+                f"Kami boleh cadangkan *{s.product_name}* sebagai pengganti{disc}.\n\n"
+                f"Setuju? Balas *YA* untuk terima atau *TIDAK* untuk tanggalkan item ini."
+            )
+        lines = ["Maaf, beberapa item perlu penggantian:\n"]
+        for s in sub_items:
+            orig = s.original_product_name or s.product_name
+            disc = f" (diskaun {s.discount_pct:.0f}%)" if s.discount_pct else ""
+            lines.append(f"• *{orig}* → *{s.product_name}*{disc}")
+        lines.append(
+            "\nSetuju dengan semua penggantian ini?\n"
+            "Balas *YA* untuk terima atau *TIDAK* untuk tanggalkan item-item ini."
+        )
+        return "\n".join(lines)
+    else:
+        if len(sub_items) == 1:
+            s = sub_items[0]
+            orig = s.original_product_name or s.product_name
+            disc = f" at *{s.discount_pct:.0f}% off*" if s.discount_pct else ""
+            return (
+                f"Sorry, we have a shortage on *{orig}*.\n\n"
+                f"We can swap it with *{s.product_name}*{disc}. "
+                f"Is that ok with you or would you like to remove this item?"
+            )
+        lines = ["Sorry, we have shortages on some items:\n"]
+        for s in sub_items:
+            orig = s.original_product_name or s.product_name
+            disc = f" ({s.discount_pct:.0f}% off)" if s.discount_pct else ""
+            lines.append(f"• *{orig}* → *{s.product_name}*{disc}")
+        lines.append(
+            "\nOk with all substitutions? "
+            "Reply *YES* to accept or *NO* to remove these items."
+        )
+        return "\n".join(lines)
+
+
+def _build_quote_message(lang: str, inv: InventoryResult) -> str:
+    """Build the order summary message without a second LLM call."""
+    lines = []
+    if lang == "ms":
+        lines.append("Berikut ringkasan pesanan anda:\n")
+        for item in inv.items:
+            note = " (pengganti)" if item.is_substituted else ""
+            lines.append(f"• *{item.product_name}*{note} x{item.fulfilled_qty} — RM{item.line_total:.2f}")
+        if inv.discount_applied:
+            lines.append(f"\nDiskaun: -RM{inv.discount_applied:.2f}")
+        lines.append(f"Penghantaran: RM{inv.delivery_fee:.2f}")
+        lines.append(f"*Jumlah: RM{inv.grand_total:.2f}*")
+        lines.append("\nBalas *YA* untuk sahkan 😊")
+    else:
+        lines.append("Here's your order summary:\n")
+        for item in inv.items:
+            note = " (substitute)" if item.is_substituted else ""
+            lines.append(f"• *{item.product_name}*{note} x{item.fulfilled_qty} — RM{item.line_total:.2f}")
+        if inv.discount_applied:
+            lines.append(f"\nDiscount: -RM{inv.discount_applied:.2f}")
+        lines.append(f"Delivery: RM{inv.delivery_fee:.2f}")
+        lines.append(f"*Total: RM{inv.grand_total:.2f}*")
+        lines.append("\nReply *YES* to confirm 😊")
+    return "\n".join(lines)
+
+
+async def _handle_substitution_reply(
+    text: str,
+    pending_order: OrderRow,
+    customer: CustomerRow,
+) -> str:
+    import json as _json
+    decision = _is_confirmation(text)
+    raw_notes = pending_order.order_notes or "{}"
+    try:
+        notes_data = _json.loads(raw_notes)
+    except Exception:
+        notes_data = {}
+
+    inventory_data = notes_data.get("inventory_result", {})
+    language = notes_data.get("language", "ms")
+
+    if decision is None:
+        if language == "ms":
+            return "Maaf, saya tidak faham. Balas *YA* untuk terima penggantian atau *TIDAK* untuk tanggalkan item tersebut."
+        return "Sorry, I didn't catch that. Reply *YES* to accept the substitution or *NO* to remove it."
+
+    try:
+        inv_result = InventoryResult(**inventory_data)
+    except Exception:
+        await supabase_service.update_order_status(pending_order.order_id, OrderStatus.EXPIRED)
+        return "Sorry, there was an issue with your order. Please send your order again."
+
+    if decision is False:
+        # Remove substituted items, recalculate
+        kept_items = [i for i in inv_result.items if not i.is_substituted]
+        if not kept_items:
+            await supabase_service.update_order_status(pending_order.order_id, OrderStatus.EXPIRED)
+            if language == "ms":
+                msg = "Ok, pesanan anda telah dibatalkan kerana tiada item yang boleh diproses. Hantar pesanan baru bila-bila masa! 😊"
+            else:
+                msg = "Ok, your order has been cancelled as no items could be fulfilled. Feel free to order again anytime! 😊"
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=pending_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg,
+            )
+            return msg
+
+        total = sum(i.line_total for i in kept_items)
+        grand = total + inv_result.delivery_fee - inv_result.discount_applied
+        inv_result = InventoryResult(
+            order_feasible=True,
+            items=kept_items,
+            total_amount=total,
+            discount_applied=inv_result.discount_applied,
+            delivery_fee=inv_result.delivery_fee,
+            grand_total=grand,
+            quote_message="",
+            requires_substitution=False,
+        )
+
+    # YES (or NO-but-kept-items): generate quote and move to Awaiting Confirmation
+    quote_msg = _build_quote_message(language, inv_result)
+
+    await supabase_service.update_order_status(
+        pending_order.order_id,
+        OrderStatus.AWAITING_CONFIRMATION,
+        order_notes=_json.dumps({
+            **notes_data,
+            "inventory_result": inv_result.model_dump(),
+        }),
+    )
+    await supabase_service.create_order_items(
+        pending_order.order_id,
+        [
+            {
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": item.fulfilled_qty,
+                "unit_price": item.unit_price,
+                "is_substituted": item.is_substituted,
+            }
+            for item in inv_result.items
+        ],
+    )
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=pending_order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=quote_msg,
+    )
+    emit(f"📝 [Substitution] Customer {'accepted' if decision else 'declined'} substitution — quote generated")
+    return quote_msg
 
 
 # ─────────────────────────────────────────
@@ -182,6 +373,389 @@ async def _resolve_to_text(
 
 
 # ─────────────────────────────────────────
+# Inquiry handler — answers questions using live context
+# ─────────────────────────────────────────
+
+async def _handle_inquiry(
+    question: str,
+    merchant_id: str,
+    lang: str,
+) -> str:
+    """Answer a customer inquiry by injecting live stock + business rules into one LLM call."""
+    import asyncio as _asyncio
+    from app.services.glm_client import run_agent_loop
+
+    settings = get_settings()
+    emit("💬 [InquiryAgent] Loading context for inquiry...")
+
+    products, business_rules = await _asyncio.gather(
+        supabase_service.get_products(merchant_id),
+        supabase_service.get_knowledge_base_rules(merchant_id),
+    )
+
+    import json as _json
+    stock_summary = _json.dumps(
+        [
+            {
+                "product_name": p.product_name,
+                "unit_price": p.unit_price,
+                "stock_quantity": p.stock_quantity,
+                "aliases": p.slang_aliases,
+            }
+            for p in products
+        ],
+        ensure_ascii=False,
+    )
+
+    lang_instruction = "Reply in Bahasa Melayu (Malay)." if lang == "ms" else "Reply in English."
+
+    system = (
+        "You are a helpful customer service assistant for a Malaysian wholesale business called SupplyLah. "
+        "Answer the customer's question concisely and honestly using only the information provided. "
+        "Do not make up products, prices, or rules that are not listed. "
+        f"{lang_instruction} "
+        "Keep the reply short — 1 to 3 sentences. Use *bold* for key numbers or product names. "
+        "Do not use more than 1 emoji."
+        f"\n\nCurrent stock:\n{stock_summary}"
+        f"\n\nBusiness rules:\n{business_rules or 'No specific rules configured.'}"
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": question},
+    ]
+
+    emit("🤖 [InquiryAgent] Calling AI model...")
+    try:
+        answer = await run_agent_loop(
+            model=settings.model_reasoning,
+            messages=messages,
+            tools=[],
+            tool_executors={},
+        )
+        emit("✅ [InquiryAgent] Answer ready")
+        return answer.strip() or (
+            "Maaf, saya tidak dapat menjawab soalan itu sekarang." if lang == "ms"
+            else "Sorry, I couldn't answer that right now."
+        )
+    except Exception as exc:
+        logger.error("Inquiry agent error: %s", exc)
+        return (
+            "Maaf, sistem kami sibuk sekarang. Cuba lagi dalam seminit ya! 🙏" if lang == "ms"
+            else "Sorry, our system is busy right now. Please try again in a minute! 🙏"
+        )
+
+
+# ─────────────────────────────────────────
+# Previous order reference handler
+# ─────────────────────────────────────────
+
+async def _handle_previous_order_reference(
+    raw_text: str,
+    customer: CustomerRow,
+    merchant_id: str,
+    lang: str,
+) -> str:
+    """Handle when buyer references a past order (e.g. 'same as yesterday')."""
+    import json as _json
+
+    emit("🔄 [Orchestrator] Buyer references previous order — fetching last order...")
+    last_order = await supabase_service.get_last_confirmed_order(customer.customer_id)
+
+    if not last_order or not last_order.get("order_item"):
+        if lang == "ms":
+            msg = "Maaf, saya tidak jumpa rekod pesanan lepas anda. Boleh nyatakan semula item yang anda mahu pesan? 😊"
+        else:
+            msg = "Sorry, I couldn't find your previous order. Could you please list the items you'd like to order? 😊"
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
+
+    items = last_order["order_item"]
+    item_lines = "\n".join(
+        f"• *{it['product_name']}* — {it['quantity']} unit" for it in items
+    )
+
+    # Detect vague quantity modifiers (e.g. "lebih sikit", "more", "tambah")
+    _MORE_KEYWORDS = {"lebih", "tambah", "more", "extra", "sikit", "banyak", "kurang", "less"}
+    raw_lower = set(raw_text.lower().split())
+    has_vague_modifier = bool(raw_lower & _MORE_KEYWORDS)
+
+    # Save a Pending order with repeat_order metadata so we can intercept the buyer's reply
+    order = await supabase_service.create_order(
+        customer_id=customer.customer_id,
+        merchant_id=merchant_id,
+        order_amount=0,
+        order_notes=_json.dumps({
+            "repeat_order": True,
+            "previous_items": items,
+            "has_vague_modifier": has_vague_modifier,
+            "language": lang,
+        }),
+        confidence_score=0.8,
+        requires_human_review=False,
+        status=OrderStatus.PENDING,
+    )
+
+    if lang == "ms":
+        if has_vague_modifier:
+            msg = (
+                f"Helo {customer.customer_name or ''}! Saya nampak anda mahu buat pesanan macam sebelumnya.\n\n"
+                f"Pesanan lepas anda:\n{item_lines}\n\n"
+                f"Boleh nyatakan item mana dan berapa banyak yang anda mahu ubah? 😊"
+            )
+        else:
+            msg = (
+                f"Helo {customer.customer_name or ''}! Saya nampak anda mahu repeat pesanan lepas.\n\n"
+                f"Pesanan lepas anda:\n{item_lines}\n\n"
+                f"Setuju untuk order sekali lagi dengan kuantiti yang sama? Balas *YA* atau *TIDAK*."
+            )
+    else:
+        if has_vague_modifier:
+            msg = (
+                f"Hey {customer.customer_name or ''}! Looks like you'd like to reorder with some changes.\n\n"
+                f"Your last order:\n{item_lines}\n\n"
+                f"Could you let me know which items and how much more you'd like? 😊"
+            )
+        else:
+            msg = (
+                f"Hey {customer.customer_name or ''}! Looks like you'd like to repeat your previous order.\n\n"
+                f"Your last order:\n{item_lines}\n\n"
+                f"Shall I go ahead with the same quantities? Reply *YES* or *NO*."
+            )
+
+    emit("📋 [Orchestrator] Asked buyer to confirm/refine previous order")
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=msg,
+    )
+    return msg
+
+
+async def _handle_repeat_order_reply(
+    raw_text: str,
+    repeat_order: OrderRow,
+    customer: CustomerRow,
+    merchant_id: str,
+) -> str:
+    """Handle buyer's reply after being asked about their repeat order.
+
+    Three scenarios:
+    1. Vague modifier was flagged + buyer specifies changes → merge & run inventory
+    2. No modifier + buyer says YES → run inventory with previous items as-is
+    3. Buyer says NO → cancel
+    """
+    import json as _json
+
+    try:
+        notes_data = _json.loads(repeat_order.order_notes or "{}")
+    except Exception:
+        notes_data = {}
+
+    previous_items = notes_data.get("previous_items", [])
+    has_vague_modifier = notes_data.get("has_vague_modifier", False)
+    language = notes_data.get("language", "ms")
+    lang = language or _detect_language(raw_text)
+
+    # If no vague modifier, treat as a YES/NO confirmation
+    if not has_vague_modifier:
+        decision = _is_confirmation(raw_text)
+        if decision is None:
+            if lang == "ms":
+                return "Maaf, saya tidak faham. Balas *YA* untuk sahkan atau *TIDAK* untuk batal."
+            return "Sorry, I didn't catch that. Reply *YES* to confirm or *NO* to cancel."
+        if decision is False:
+            await supabase_service.update_order_status(repeat_order.order_id, OrderStatus.EXPIRED)
+            if lang == "ms":
+                msg = "Ok, pesanan dibatalkan. Boleh buat pesanan baru bila-bila masa! 😊"
+            else:
+                msg = "Ok, order cancelled. Feel free to place a new order anytime! 😊"
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=repeat_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg,
+            )
+            return msg
+        # YES — proceed with previous items as-is
+        merged_items = previous_items
+    else:
+        # Buyer is specifying modifications — use LLM to merge their reply with previous items
+        merged_items = await _merge_repeat_modifications(raw_text, previous_items)
+
+    if not merged_items:
+        if lang == "ms":
+            msg = "Maaf, saya tidak faham perubahan yang anda mahu. Boleh nyatakan semula? 😊"
+        else:
+            msg = "Sorry, I couldn't understand your changes. Could you try again? 😊"
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=repeat_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
+
+    # Build IntakeResult from merged items and run inventory agent
+    from app.models.schemas import IntakeResult, OrderLineItem
+    intake = IntakeResult(
+        intent="order",
+        items=[
+            OrderLineItem(product_name=it["product_name"], quantity=it["quantity"], unit=it.get("unit"))
+            for it in merged_items
+        ],
+        language_detected=lang,
+        confidence=0.85,
+    )
+
+    # Notify customer we're checking stock
+    ack_stock_msg = _ack_checking_stock(lang, intake.items)
+    await _send_intermediate(customer, ack_stock_msg)
+
+    emit(f"📦 [InventoryAgent] Checking stock for {len(intake.items)} item(s) (repeat order)...")
+    inventory = await run_inventory_agent(intake, merchant_id, lang)
+
+    if not inventory.order_feasible or not inventory.items:
+        fallback = inventory.quote_message or (
+            "Maaf, kami tidak dapat memproses pesanan ini sekarang. / "
+            "Sorry, we couldn't process this order right now."
+        )
+        await supabase_service.update_order_status(repeat_order.order_id, OrderStatus.EXPIRED)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=fallback,
+        )
+        return fallback
+
+    # Handle substitution if needed
+    sub_items = [i for i in inventory.items if i.is_substituted]
+    if sub_items:
+        await supabase_service.update_order_status(
+            repeat_order.order_id,
+            OrderStatus.AWAITING_SUBSTITUTION,
+            order_notes=_json.dumps({
+                "inventory_result": inventory.model_dump(),
+                "intake_result": intake.model_dump(),
+                "delivery_address": customer.delivery_address or "",
+                "language": lang,
+            }),
+        )
+        question = _build_substitution_question(lang, sub_items)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=repeat_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=question,
+        )
+        return question
+
+    # No substitutions — update order and generate quote
+    await supabase_service.update_order_status(
+        repeat_order.order_id,
+        OrderStatus.AWAITING_CONFIRMATION,
+        order_notes=_json.dumps({
+            "inventory_result": inventory.model_dump(),
+            "intake_result": intake.model_dump(),
+            "delivery_address": customer.delivery_address or "",
+            "language": lang,
+        }),
+        order_amount=inventory.grand_total,
+        confidence_score=intake.confidence,
+    )
+
+    await supabase_service.create_order_items(
+        repeat_order.order_id,
+        [
+            {
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": item.fulfilled_qty,
+                "unit_price": item.unit_price,
+                "is_substituted": item.is_substituted,
+            }
+            for item in inventory.items
+        ],
+    )
+
+    quote_msg = _build_quote_message(lang, inventory)
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=repeat_order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=quote_msg,
+    )
+    emit(f"✅ [DB] Repeat order {repeat_order.order_id[:8]}... saved — status: Awaiting Confirmation")
+    return quote_msg
+
+
+async def _merge_repeat_modifications(
+    raw_text: str,
+    previous_items: list[dict],
+) -> list[dict]:
+    """Use LLM to merge buyer's modifications with previous order items.
+
+    Returns a list of dicts with product_name and quantity.
+    """
+    import json as _json
+    from app.services.glm_client import run_agent_loop
+    settings = get_settings()
+
+    prev_summary = "\n".join(
+        f"- {it['product_name']}: {it['quantity']} unit" for it in previous_items
+    )
+
+    system = (
+        "You are an order modification assistant. The buyer previously ordered:\n"
+        f"{prev_summary}\n\n"
+        "Now they want to modify their order. Parse their message and output the FULL updated item list "
+        "as a JSON array. Each item must have 'product_name' (exact same name as before) and 'quantity' (integer). "
+        "If they say 'sama je' / 'same' / 'lain sama' for an item, keep the original quantity. "
+        "If they say 'tambah X' / 'add X' / 'X more', add X to the original quantity. "
+        "If they say 'kurang X' / 'X less', subtract X. "
+        "Only include items that should remain in the order. "
+        "Output ONLY the JSON array, no other text."
+    )
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": raw_text},
+    ]
+
+    try:
+        import re as _re
+        raw_output = await run_agent_loop(
+            model=settings.model_reasoning,
+            messages=messages,
+            tools=[],
+            tool_executors={},
+        )
+        raw_output = raw_output.strip()
+        fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
+        if fence_match:
+            raw_output = fence_match.group(1).strip()
+        items = _json.loads(raw_output)
+        if isinstance(items, list) and all("product_name" in i and "quantity" in i for i in items):
+            return items
+        return []
+    except Exception as exc:
+        logger.error("Merge repeat modifications error: %s", exc)
+        return []
+
+
+# ─────────────────────────────────────────
 # Core orchestration handlers
 # ─────────────────────────────────────────
 
@@ -194,29 +768,47 @@ async def _handle_new_order(
     settings = get_settings()
 
     # Step 1: Intake Agent
+    emit("🧠 [IntakeAgent] Sending message to AI model for parsing...")
     intake = await run_intake_agent(raw_text, merchant_id)
     logger.info(
         "Intake: intent=%s items=%d confidence=%.2f",
         intake.intent, len(intake.items), intake.confidence,
     )
+    emit(
+        f"🎯 [IntakeAgent] Intent: {intake.intent} | "
+        f"Items detected: {len(intake.items)} | "
+        f"Confidence: {intake.confidence:.0%}"
+    )
 
-    # Non-order intents (or API errors that returned intent="other")
+    # Non-order intents
     if intake.intent != "order":
         if intake.clarification_needed and intake.clarification_message:
-            # Covers API errors / service-down cases — use the message the agent set
+            # API error / parse failure — use the clarification message directly
             msg = intake.clarification_message
+        elif intake.intent == "inquiry":
+            # Customer asking a question — answer from live context
+            emit("💬 [Orchestrator] Inquiry intent detected — routing to inquiry handler")
+            lang = _detect_language(raw_text)
+            msg = await _handle_inquiry(raw_text, merchant_id, lang)
         else:
-            msg = (
-                "Hi! I can help you place wholesale orders. "
-                "Just send me a message or voice note with what you need and how much. / "
-                "Saya boleh bantu terima pesanan borong. Sila hantar mesej atau nota suara dengan butiran pesanan anda."
-            )
+            # complaint / other — generic fallback
+            lang = _detect_language(raw_text)
+            if lang == "ms":
+                msg = "Helo! Saya boleh bantu terima pesanan borong. Hantar mesej atau nota suara dengan butiran pesanan anda ya 😊"
+            else:
+                msg = "Hi! I can help you place wholesale orders. Just send me a message or voice note with what you need and how much 😊"
         await supabase_service.log_message(
             customer_id=customer.customer_id,
             sender_type="agent",
             message_type="text",
             content=msg,
         )
+        return msg
+
+    # Buyer references a previous order — fetch last order and ask for confirmation
+    if intake.references_previous_order:
+        lang = _detect_language(raw_text)
+        msg = await _handle_previous_order_reference(raw_text, customer, merchant_id, lang)
         return msg
 
     # Low confidence → ask for clarification
@@ -233,22 +825,31 @@ async def _handle_new_order(
         )
         return msg
 
-    # Step 1.5: Notify customer we're checking stock
-    lang = intake.language_detected or "ms"
-    items_preview = ", ".join(
-        f"{i.quantity}x {i.product_name}" for i in intake.items[:3]
-    )
-    if len(intake.items) > 3:
-        items_preview += f" +{len(intake.items) - 3} more"
-    await _send_intermediate(customer, _ack_checking_stock(lang, items_preview))
+    # Use our own language detection on the raw text — the intake agent's
+    # language_detected is unreliable for short Malay messages
+    lang = _detect_language(raw_text)
 
-    # Step 2: Inventory Agent
+    # Step 2: Notify customer we're checking stock
+    ack_stock_msg = _ack_checking_stock(lang, intake.items)
+    await _send_intermediate(customer, ack_stock_msg)
+    emit(f"📱 [WhatsApp] Sent: \"{ack_stock_msg.split(chr(10))[0]}\"")
+
+    # Step 3: Inventory Agent
+    emit(f"📦 [InventoryAgent] Checking stock for {len(intake.items)} item(s)...")
     inventory = await run_inventory_agent(intake, merchant_id, intake.language_detected)
+    emit(
+        f"📦 [InventoryAgent] Stock check complete — "
+        f"{'order feasible ✓' if inventory.order_feasible else 'order unfeasible ✗'} | "
+        f"Total: RM{inventory.grand_total:.2f}"
+    )
 
     if not inventory.order_feasible or not inventory.items:
-        fallback = (
-            "Sorry, we're unable to fulfil this order right now. "
-            "Please contact us directly for assistance."
+        # Use the AI's quote_message if it has one (e.g. explains which items are out of stock)
+        # otherwise fall back to a generic message
+        fallback = inventory.quote_message or (
+            "Maaf, kami tidak dapat memproses pesanan ini sekarang. "
+            "Sila cuba lagi sebentar. / "
+            "Sorry, we couldn't process this order right now. Please try again in a moment."
         )
         await supabase_service.log_message(
             customer_id=customer.customer_id,
@@ -258,12 +859,48 @@ async def _handle_new_order(
         )
         return fallback
 
-    # Persist order in Awaiting Confirmation state
+    import json
+
+    # Substitution needed — ask buyer BEFORE generating the full quote
+    sub_items = [i for i in inventory.items if i.is_substituted]
+    if sub_items:
+        emit(f"🔄 [Orchestrator] {len(sub_items)} substitution(s) needed — asking buyer first")
+        order = await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=inventory.grand_total,
+            order_notes="",
+            confidence_score=intake.confidence,
+            requires_human_review=False,
+            status=OrderStatus.AWAITING_SUBSTITUTION,
+        )
+        await supabase_service.update_order_status(
+            order.order_id,
+            OrderStatus.AWAITING_SUBSTITUTION,
+            order_notes=json.dumps({
+                "inventory_result": inventory.model_dump(),
+                "intake_result": intake.model_dump(),
+                "delivery_address": intake.delivery_address or customer.delivery_address or "",
+                "language": intake.language_detected,
+            }),
+        )
+        question = _build_substitution_question(lang, sub_items)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=question,
+        )
+        return question
+
+    # No substitutions — persist order in Awaiting Confirmation state directly
+    emit("💾 [DB] Saving order to database...")
     order = await supabase_service.create_order(
         customer_id=customer.customer_id,
         merchant_id=merchant_id,
         order_amount=inventory.grand_total,
-        order_notes=f"Items: {', '.join(i.product_name for i in inventory.items)}",
+        order_notes="",
         confidence_score=intake.confidence,
         requires_human_review=intake.confidence < settings.low_confidence_threshold,
         status=OrderStatus.AWAITING_CONFIRMATION,
@@ -283,7 +920,6 @@ async def _handle_new_order(
         ],
     )
 
-    import json
     await supabase_service.update_order_status(
         order.order_id,
         OrderStatus.AWAITING_CONFIRMATION,
@@ -303,6 +939,8 @@ async def _handle_new_order(
         content=inventory.quote_message,
     )
 
+    emit(f"✅ [DB] Order {order.order_id[:8]}... saved — status: Awaiting Confirmation")
+    emit("📝 [Composer] Generating order quote message for buyer...")
     logger.info("Order %s created, awaiting buyer confirmation", order.order_id)
     return inventory.quote_message
 
@@ -369,6 +1007,10 @@ async def _handle_confirmation_reply(
             content=logistics.confirmation_message,
         )
         await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
+        emit_message(logistics.confirmation_message)
+        collector = _msg_collector.get()
+        if collector is not None:
+            collector.append(logistics.confirmation_message)
 
     _inventory_queue.put_nowait(_do_logistics())
     ensure_inventory_worker()
@@ -403,7 +1045,9 @@ async def handle_incoming_message(
     ensure_inventory_worker()
 
     # 1. Get or create customer
+    emit(f"👤 [CRM] Looking up customer: {from_number}...")
     customer = await supabase_service.get_or_create_customer(from_number, merchant_id)
+    emit(f"👤 [CRM] Customer found — ID ...{customer.customer_id[-8:]}")
 
     # 2. Log inbound message
     await supabase_service.log_message(
@@ -414,13 +1058,26 @@ async def handle_incoming_message(
         media_url=media_url,
     )
 
-    # 3. Check for pending order (Awaiting Confirmation state)
+    # 3. Route based on current conversation state
+    emit("📋 [State] Checking conversation state...")
+    repeat_order = await supabase_service.get_repeat_pending_order(customer.customer_id)
+    sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
 
-    if pending_order:
+    if repeat_order:
+        emit(f"📋 [State] Awaiting repeat order clarification — order {repeat_order.order_id[:8]}...")
+        raw_text = await _resolve_to_text(message_type, text_content, media_url)
+        final = await _handle_repeat_order_reply(raw_text, repeat_order, customer, merchant_id)
+    elif sub_order:
+        emit(f"📋 [State] Awaiting substitution reply — order {sub_order.order_id[:8]}...")
+        raw_text = await _resolve_to_text(message_type, text_content, media_url)
+        final = await _handle_substitution_reply(raw_text, sub_order, customer)
+    elif pending_order:
+        emit(f"📋 [State] Awaiting confirmation reply — order {pending_order.order_id[:8]}...")
         raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_confirmation_reply(raw_text, pending_order, customer)
     else:
+        emit("📋 [State] No pending order — treating as new order request")
         # Send immediate ack so the customer knows we received their message
         lang = _detect_language(text_content or "")
         await _send_intermediate(customer, _ack_received(message_type, lang))

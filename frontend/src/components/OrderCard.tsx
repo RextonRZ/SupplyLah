@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Order, STATUS_COLORS } from "@/lib/types";
+import { Order } from "@/lib/types";
 import { BACKEND_URL } from "@/lib/supabase";
 
 interface Props {
@@ -11,15 +11,16 @@ interface Props {
 }
 
 export default function OrderCard({ order, onOverride }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded,   setExpanded]   = useState(false);
   const [overriding, setOverriding] = useState(false);
 
-  const statusClass = STATUS_COLORS[order.order_status] || "bg-gray-100 text-gray-600";
+  const isAlert = order.requires_human_review
+    && order.order_status !== "Confirmed"
+    && order.order_status !== "Dispatched";
+
   const createdAgo = order.created_at
     ? formatDistanceToNow(new Date(order.created_at), { addSuffix: true })
     : "";
-
-  const isAlert = order.requires_human_review && order.order_status !== "Confirmed" && order.order_status !== "Dispatched";
 
   async function handleOverride(status: string) {
     setOverriding(true);
@@ -30,98 +31,75 @@ export default function OrderCard({ order, onOverride }: Props) {
         body: JSON.stringify({ status, notes: "Manual override by staff" }),
       });
       onOverride?.();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setOverriding(false);
-    }
+    } catch {}
+    finally { setOverriding(false); }
   }
 
   return (
     <div
-      className={`bg-white rounded-xl border shadow-sm p-3 cursor-pointer transition-all hover:shadow-md ${
-        isAlert ? "border-red-300 ring-1 ring-red-200" : "border-slate-200"
+      onClick={() => setExpanded(v => !v)}
+      className={`rounded-lg border bg-white cursor-pointer transition-colors duration-150 ${
+        isAlert
+          ? "border-red-200 bg-red-50/40"
+          : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60"
       }`}
-      onClick={() => setExpanded((v) => !v)}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-800 truncate">
-            {order.customer?.customer_name || "Unknown Buyer"}
+      <div className="px-3 py-2.5">
+        <div className="flex items-start justify-between gap-1.5 mb-1">
+          <p className="text-xs font-semibold text-slate-800 leading-tight truncate">
+            {order.customer?.customer_name || "Unknown"}
           </p>
-          <p className="text-xs text-slate-500 truncate">
-            {order.customer?.whatsapp_number}
-          </p>
+          {order.order_amount != null && (
+            <p className="text-xs font-bold text-teal-700 shrink-0 tabular-nums">
+              RM {order.order_amount.toFixed(0)}
+            </p>
+          )}
         </div>
-        <span className={`status-badge shrink-0 ${statusClass}`}>
-          {order.order_status}
-        </span>
+        <div className="flex items-center justify-between gap-1">
+          <p className="text-[11px] text-slate-400 font-mono truncate">{order.customer?.whatsapp_number}</p>
+          <p className="text-[11px] text-slate-400 shrink-0">{createdAgo}</p>
+        </div>
+        {isAlert && (
+          <div className="mt-1.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+            <p className="text-[11px] text-red-500 font-medium">
+              {((order.confidence_score || 0) * 100).toFixed(0)}% confidence — review needed
+            </p>
+          </div>
+        )}
       </div>
 
-      {/* Meta row */}
-      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-        <span>
-          {order.order_amount ? `RM ${order.order_amount.toFixed(2)}` : "—"}
-        </span>
-        <span>{createdAgo}</span>
-      </div>
-
-      {/* Alert badge */}
-      {isAlert && (
-        <div className="mt-2 flex items-center gap-1 text-xs text-red-600 font-medium alert-pulse">
-          <span>⚠</span>
-          <span>
-            Low confidence ({((order.confidence_score || 0) * 100).toFixed(0)}%) — Needs review
-          </span>
-        </div>
-      )}
-
-      {/* Expanded detail */}
       {expanded && (
-        <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
-          {/* Items */}
+        <div className="border-t border-slate-100 px-3 py-2.5 space-y-2" onClick={e => e.stopPropagation()}>
           {order.order_item && order.order_item.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-slate-600 mb-1">Items</p>
-              <ul className="space-y-0.5">
-                {order.order_item.map((item) => (
-                  <li
-                    key={item.product_id}
-                    className="text-xs text-slate-700 flex justify-between"
-                  >
-                    <span>
-                      {item.is_substituted ? "🔄 " : ""}
-                      {item.product_name} × {item.quantity}
-                    </span>
-                    <span>RM {(item.unit_price * item.quantity).toFixed(2)}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="space-y-1">
+              {order.order_item.map((item) => (
+                <div key={item.product_id} className="flex justify-between text-[11px]">
+                  <span className="text-slate-600">
+                    {item.is_substituted && <span className="text-orange-500 mr-1">↔</span>}
+                    {item.product_name} × {item.quantity}
+                  </span>
+                  <span className="text-slate-500 tabular-nums">RM {(item.unit_price * item.quantity).toFixed(2)}</span>
+                </div>
+              ))}
             </div>
           )}
-
-          {/* Order ID */}
-          <p className="text-xs text-slate-400 font-mono">
-            #{order.order_id.split("-")[0]}
-          </p>
-
-          {/* Override buttons for review items */}
+          <p className="text-[10px] text-slate-300 font-mono">#{order.order_id.split("-")[0]}</p>
           {isAlert && (
-            <div className="flex gap-2 pt-1" onClick={(e) => e.stopPropagation()}>
+            <div className="flex gap-1.5 pt-0.5">
               <button
                 disabled={overriding}
                 onClick={() => handleOverride("Confirmed")}
-                className="flex-1 text-xs bg-green-600 text-white rounded-lg py-1.5 font-medium hover:bg-green-700 disabled:opacity-50"
+                className="flex-1 text-xs py-1.5 rounded-md font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 transition-colors"
               >
-                ✓ Approve
+                Approve
               </button>
               <button
                 disabled={overriding}
                 onClick={() => handleOverride("Failed")}
-                className="flex-1 text-xs bg-red-100 text-red-700 rounded-lg py-1.5 font-medium hover:bg-red-200 disabled:opacity-50"
+                className="flex-1 text-xs py-1.5 rounded-md font-semibold border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-50 transition-colors"
               >
-                ✕ Reject
+                Reject
               </button>
             </div>
           )}

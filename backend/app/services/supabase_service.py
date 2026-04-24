@@ -77,6 +77,43 @@ async def get_pending_order(customer_id: str) -> Optional[OrderRow]:
     return None
 
 
+async def get_substitution_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Awaiting Substitution order for this customer, if any."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.AWAITING_SUBSTITUTION.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return OrderRow(**result.data[0])
+    return None
+
+
+async def get_repeat_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Pending order that has repeat_order metadata (awaiting buyer clarification)."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.PENDING.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        row = result.data[0]
+        notes = row.get("order_notes") or ""
+        if "repeat_order" in notes:
+            return OrderRow(**row)
+    return None
+
+
 async def create_order(
     customer_id: str,
     merchant_id: str,
@@ -125,6 +162,23 @@ async def get_order_items(order_id: str) -> list[dict]:
         .execute()
     )
     return result.data or []
+
+
+async def get_last_confirmed_order(customer_id: str) -> Optional[dict]:
+    """Return the most recent Confirmed/Dispatched order with its items for repeat-order logic."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*, order_item(*)")
+        .eq("customer_id", customer_id)
+        .in_("order_status", [OrderStatus.CONFIRMED.value, OrderStatus.DISPATCHED.value])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0]
+    return None
 
 
 # ─────────────────────────────────────────
