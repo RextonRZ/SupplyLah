@@ -943,7 +943,6 @@ async def _merge_repeat_modifications(
 
 async def _handle_new_order(
     raw_text: str,
-    message_type: MessageType,
     customer: CustomerRow,
     merchant_id: str,
 ) -> str:
@@ -1031,7 +1030,7 @@ async def _handle_new_order(
     raw_addr = intake.delivery_address or ""
     has_address = _is_specific_address(raw_addr)
     customer_has_address = _is_specific_address(customer.delivery_address or "")
-    if message_type == MessageType.TEXT and not has_address and not customer_has_address:
+    if not has_address and not customer_has_address:
         if lang == "ms":
             addr_msg = (
                 "Terima kasih! Boleh berikan alamat penghantaran penuh anda? 📍\n"
@@ -1449,7 +1448,7 @@ async def handle_incoming_message(
             )
         else:
             # 5. Process as new order
-            final = await _handle_new_order(raw_text, message_type, customer, merchant_id)
+            final = await _handle_new_order(raw_text, customer, merchant_id)
 
     # Add the final reply to the mock-chat collector (if active)
     collector = _msg_collector.get()
