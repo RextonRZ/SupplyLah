@@ -2025,7 +2025,7 @@ export default function Dashboard() {
                     Pipeline
                   </h3>
                   <button
-                    onClick={() => clearAiLogs}
+                    onClick={clearAiLogs}
                     className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
                   >
                     Clear

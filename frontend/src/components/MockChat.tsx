@@ -208,6 +208,12 @@ export default function MockChat({
     };
     es.onerror = () => es.close();
 
+    // Wait for EventSource to connect before sending the fetch
+    await new Promise<void>((resolve) => {
+      es.addEventListener("open", () => resolve(), { once: true });
+      setTimeout(resolve, 500);
+    });
+
     const t0 = Date.now();
 
     try {
@@ -314,6 +320,13 @@ export default function MockChat({
       } catch {}
     };
     es.onerror = () => es.close();
+
+    // Wait for EventSource to connect before sending the fetch,
+    // otherwise early SSE events (like "Dapat!" ack) may be missed
+    await new Promise<void>((resolve) => {
+      es.addEventListener("open", () => resolve(), { once: true });
+      setTimeout(resolve, 500); // fallback timeout
+    });
 
     const t0 = Date.now();
 
