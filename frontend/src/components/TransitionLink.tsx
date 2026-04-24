@@ -12,7 +12,7 @@ type Props = {
 
 export default function TransitionLink({ href, children, className, ...rest }: Props) {
   const router = useRouter();
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleClick: MouseEventHandler<HTMLAnchorElement> = useCallback(
     (e) => {

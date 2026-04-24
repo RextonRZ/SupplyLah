@@ -266,7 +266,7 @@ function InventoryStep({ products, setProducts }: { products: Product[]; setProd
             ] as const).map(({ key, label, col, type }) => (
               <div key={key} className={col}>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">{label}</label>
-                <input type={type} value={(row as Record<string, string>)[key]}
+                <input type={type} value={(row as any)[key]}
                   onChange={(e) => setRow({ ...row, [key]: e.target.value })}
                   className={INPUT} />
               </div>
@@ -638,7 +638,8 @@ export default function GetStartedPage() {
           product_sku: p.product_id || null, // mapping UI 'product_id' to logic 'product_sku' temp
           unit_price: parseFloat(p.unit_price) || 0, 
           stock_quantity: parseInt(p.available_quantity) || 0,
-          /* Note: unit, reorder_threshold, supplier_id might need columns backed in Supabase */
+          unit: p.unit || null,
+          reorder_threshold: parseInt(p.reorder_threshold) || 0,
           slang_aliases: [],
         })));
       }
@@ -647,14 +648,30 @@ export default function GetStartedPage() {
           merchant_id: merchantId, customer_name: c.name, whatsapp_number: c.phone, delivery_address: c.address || null,
         })));
       }
+
+      // Format substitution rules for the AI Agent
+      const subRules = Object.entries(rules.substitutions)
+        .filter(([_, sub]) => sub.substitute_id && sub.substitute_id !== "N/A")
+        .map(([prodId, sub]) => {
+          const original = products.find(p => p.product_id === prodId)?.product_name || prodId;
+          const substitute = products.find(p => p.product_id === sub.substitute_id)?.product_name || sub.substitute_id;
+          return `- If "${original}" is out of stock, offer "${substitute}" as a substitute at a ${sub.discount || 0}% discount.`;
+        }).join("\n");
+
       const rulesText = [
         `Minimum order value: RM${rules.minOrderValue}.`,
-        rules.allowDiscount ? `Substitutions allowed.` : "Do not offer discounts for substitutes.",
+        rules.allowDiscount ? `Substitutions allowed:\n${subRules}` : "Do not offer discounts for substitutes.",
         rules.chargeDelivery ? `Charge delivery fee. Flat rate: RM${rules.deliveryFee || "0 (use live Lalamove price)"}.` : "Delivery fee absorbed by merchant.",
-      ].join(" ");
-      await supabase.from("knowledge_base").upsert({ merchant_id: merchantId, content: rulesText, document_type: "business_rules" }, { onConflict: "merchant_id,document_type" });
+      ].join("\n\n");
+      
+      const { error: kbError } = await supabase.from("knowledge_base").upsert([
+        { merchant_id: merchantId, content: rulesText, document_type: "business_rules" },
+        { merchant_id: merchantId, content: JSON.stringify(rules), document_type: "business_rules_json" }
+      ], { onConflict: "merchant_id,document_type" });
+      if (kbError) throw kbError;
+
       if (team.length > 0) {
-        await supabase.from("merchant_users").insert(team.map(m => ({ merchant_id: merchantId, invited_email: m.email, role: m.role, status: "invited" })));
+        await supabase.from("merchant_users").insert(team.map(m => ({ merchant_id: merchantId, invited_email: m.email, contact_number: m.phone, role: m.role, status: "invited" })));
       }
       await supabase.auth.updateUser({ data: { onboarding_complete: true, merchant_id: merchantId } });
       router.push("/dashboard");

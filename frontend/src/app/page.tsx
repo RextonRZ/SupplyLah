@@ -57,7 +57,7 @@ function Navbar() {
             </span>
             <span className="relative z-10 flex items-center gap-1.5">
               Sign up free
-              <span className="group-hover:translate-x-0.5 transition-transform duration-300">→</span>
+              <span className="group-hover:translate-x-0.5 transition-transform duration-300"></span>
             </span>
           </Link>
         </div>
