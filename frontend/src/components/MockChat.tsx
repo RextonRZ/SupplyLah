@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { BACKEND_URL } from "@/lib/supabase";
+import { supabase, BACKEND_URL } from "@/lib/supabase";
 
 interface ChatMessage {
   role: "buyer" | "agent";
@@ -9,24 +9,22 @@ interface ChatMessage {
   time: string;
 }
 
-const DEMO_PHONE = "+60198765432";
+const DEFAULT_PHONE = "+60198765432";
+const DEFAULT_NAME  = "Demo Customer";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
-// Mirrors the backend's _ack_received() so we can show it immediately
 const MALAY_WORDS = /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
-const EN_WORDS = /\b(please|want|need|send|deliver|thank|hello|hi|yes|cancel|confirm|address|price|how|order)\b/i;
+const EN_WORDS    = /\b(please|want|need|send|deliver|thank|hello|hi|yes|cancel|confirm|address|price|how|order)\b/i;
 
 function getImmediateAck(text: string): string {
   const msHits = (text.match(MALAY_WORDS) || []).length;
   const enHits = (text.match(EN_WORDS) || []).length;
-  // Default to Malay for ambiguous/short messages (Malaysian platform)
   const isMalay = msHits >= enHits;
   return isMalay
     ? "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..."
     : "On it! 🔍 Processing your order, give me a sec...";
 }
 
-// Map real backend log lines → short chat bubble hints
 function logToHint(log: string): string | null {
   if (log.includes("CRM") || log.includes("customer")) return "Looking up your profile…";
   if (log.includes("catalogue") || log.includes("Catalogue")) return "Loading product catalogue…";
@@ -43,7 +41,6 @@ function now() {
   return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
 }
 
-// Renders WhatsApp-style formatting: *bold*, _italic_, line breaks, paragraph spacing
 function WhatsAppText({ text }: { text: string }) {
   function parseLine(line: string): React.ReactNode {
     const segments = line.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
@@ -56,7 +53,6 @@ function WhatsAppText({ text }: { text: string }) {
     });
   }
 
-  // Split into paragraphs on blank lines, then lines within each paragraph
   const paragraphs = text.split(/\n{2,}/);
   return (
     <div className="space-y-2 leading-relaxed">
@@ -76,12 +72,21 @@ function WhatsAppText({ text }: { text: string }) {
 
 export default function MockChat({
   merchantId,
+  fromPhone,
+  fromName,
+  shopName,
   onLog,
 }: {
   merchantId?: string;
+  fromPhone?: string;
+  fromName?: string;
+  shopName?: string;
   onLog?: (message: string) => void;
 }) {
   const resolvedMerchant = merchantId || DEMO_MERCHANT;
+  const phone = fromPhone || DEFAULT_PHONE;
+  const name  = fromName  || DEFAULT_NAME;
+  const shop  = shopName  || "Demo Wholesaler";
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -90,27 +95,38 @@ export default function MockChat({
       time: now(),
     },
   ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [input,    setInput]    = useState("");
+  const [loading,  setLoading]  = useState(false);
   const [chatHint, setChatHint] = useState("Thinking…");
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
-  const sseShown = useRef<Set<string>>(new Set());
+  const bottomRef  = useRef<HTMLDivElement>(null);
+  const esRef      = useRef<EventSource | null>(null);
+  const sseShown   = useRef<Set<string>>(new Set());
+  const nameSynced = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Clean up SSE on unmount
   useEffect(() => () => { esRef.current?.close(); }, []);
+
+  async function syncNameToDb() {
+    if (nameSynced.current || !name || name === DEFAULT_NAME) return;
+    try {
+      await supabase
+        .from("customer")
+        .update({ customer_name: name })
+        .eq("whatsapp_number", phone)
+        .eq("merchant_id", resolvedMerchant);
+      nameSynced.current = true;
+    } catch {}
+  }
 
   async function sendMessage() {
     if (!input.trim() || loading) return;
     const text = input.trim();
     setInput("");
 
-    // 1. User message + immediate ack appear instantly
     const ackMsg = getImmediateAck(text);
     setMessages((prev) => [
       ...prev,
@@ -123,10 +139,8 @@ export default function MockChat({
     onLog?.("─────────────────────────────────");
     onLog?.(`📨 Buyer: "${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`);
 
-    // 2. Open SSE stream BEFORE posting so we catch every log from the start
     const sessionId = crypto.randomUUID();
     esRef.current?.close();
-    // Pre-register the ack we already showed — so when backend emits it via SSE we skip it
     sseShown.current.clear();
     sseShown.current.add(ackMsg);
     const es = new EventSource(`${BACKEND_URL}/api/session-logs/${sessionId}`);
@@ -141,7 +155,7 @@ export default function MockChat({
           if (hint) setChatHint(hint);
         }
         if (data.type === "message") {
-          if (sseShown.current.has(data.text)) return; // already shown (e.g. instant ack)
+          if (sseShown.current.has(data.text)) return;
           sseShown.current.add(data.text);
           setMessages((prev) => [...prev, { role: "agent", text: data.text, time: now() }]);
         }
@@ -153,7 +167,6 @@ export default function MockChat({
     const t0 = Date.now();
 
     try {
-      // 3. POST with session ID so backend pushes logs to our SSE queue
       const res = await fetch(`${BACKEND_URL}/webhook/mock-chat`, {
         method: "POST",
         headers: {
@@ -161,7 +174,7 @@ export default function MockChat({
           "X-Session-Id": sessionId,
         },
         body: JSON.stringify({
-          from_number: DEMO_PHONE,
+          from_number: phone,
           message_type: "text",
           text_content: text,
           merchant_id: resolvedMerchant,
@@ -172,7 +185,6 @@ export default function MockChat({
       const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
       const data = await res.json();
       const allReplies: string[] = data.replies ?? (data.reply ? [data.reply] : []);
-      // Skip the instant ack + anything already shown via SSE message events
       const replies = allReplies.filter(
         (r) => r.trim() !== ackMsg.trim() && !sseShown.current.has(r)
       );
@@ -180,6 +192,8 @@ export default function MockChat({
 
       onLog?.(`✅ [Pipeline] Response in ${elapsed}s — ${replies.length} message(s) to buyer`);
       setLoading(false);
+
+      await syncNameToDb();
 
       for (let i = 0; i < replies.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 650));
@@ -198,24 +212,21 @@ export default function MockChat({
 
   return (
     <div className="bg-black flex flex-col h-full overflow-hidden">
-      {/* Fake phone status bar */}
+      {/* Status bar */}
       <div className="bg-black text-white flex items-center justify-between px-5 pt-2 pb-1 shrink-0" style={{ fontSize: "11px" }}>
         <span className="font-semibold tabular-nums">{now()}</span>
         <div className="flex items-center gap-1.5">
-          {/* Signal bars */}
           <svg width="16" height="12" viewBox="0 0 16 12" fill="white">
             <rect x="0" y="8" width="3" height="4" rx="0.5" />
             <rect x="4.5" y="5" width="3" height="7" rx="0.5" />
             <rect x="9" y="2" width="3" height="10" rx="0.5" />
             <rect x="13.5" y="0" width="2.5" height="12" rx="0.5" opacity="0.3" />
           </svg>
-          {/* WiFi */}
           <svg width="15" height="12" viewBox="0 0 24 18" fill="white">
             <path d="M12 14a2 2 0 110 4 2 2 0 010-4z"/>
             <path d="M5.6 9.4a9 9 0 0112.8 0" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round"/>
             <path d="M1.4 5.2a15 15 0 0121.2 0" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.5"/>
           </svg>
-          {/* Battery */}
           <div className="flex items-center gap-0.5">
             <div className="relative w-[22px] h-[11px] rounded-[2px] border border-white/80">
               <div className="absolute inset-[1.5px] right-[3px] bg-white rounded-[1px]" />
@@ -225,24 +236,21 @@ export default function MockChat({
         </div>
       </div>
 
-      {/* WhatsApp-style header */}
+      {/* WhatsApp header */}
       <div className="bg-[#075E54] text-white px-3 py-2 flex items-center gap-2.5 shrink-0">
         <div className="w-8 h-8 rounded-full bg-green-400 flex items-center justify-center text-base shrink-0">
           🏪
         </div>
         <div>
-          <p className="text-sm font-bold leading-tight">Demo Wholesaler</p>
-          <p className="text-[10px] opacity-75 leading-tight">WhatsApp Business · end-to-end encrypted</p>
+          <p className="text-sm font-bold leading-tight">{shop}</p>
+          <p className="text-[10px] opacity-75 leading-tight">WhatsApp Business · online</p>
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-[#e5ddd5]">
         {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`flex ${m.role === "buyer" ? "justify-end" : "justify-start"}`}
-          >
+          <div key={i} className={`flex ${m.role === "buyer" ? "justify-end" : "justify-start"}`}>
             <div
               className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm shadow-sm ${
                 m.role === "buyer"
@@ -256,23 +264,13 @@ export default function MockChat({
           </div>
         ))}
 
-        {/* Animated thinking bubble */}
         {loading && (
           <div className="flex justify-start">
             <div className="bg-white rounded-2xl rounded-tl-sm px-3 py-2.5 shadow-sm max-w-[85%]">
               <div className="flex items-center gap-1.5 mb-1">
-                <span
-                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
-                  style={{ animationDelay: "0ms" }}
-                />
-                <span
-                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
-                  style={{ animationDelay: "160ms" }}
-                />
-                <span
-                  className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"
-                  style={{ animationDelay: "320ms" }}
-                />
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "160ms" }} />
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: "320ms" }} />
               </div>
               <p className="text-[11px] text-slate-500 leading-relaxed">{chatHint}</p>
             </div>
