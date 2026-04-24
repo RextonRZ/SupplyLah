@@ -94,6 +94,26 @@ async def get_substitution_pending_order(customer_id: str) -> Optional[OrderRow]
     return None
 
 
+async def get_restock_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Pending order waiting for a restock notification reply."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.PENDING.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        row = result.data[0]
+        notes = row.get("order_notes") or ""
+        if "restock_notification" in notes:
+            return OrderRow(**row)
+    return None
+
+
 async def get_repeat_pending_order(customer_id: str) -> Optional[OrderRow]:
     """Return the most recent Pending order that has repeat_order metadata (awaiting buyer clarification)."""
     result = (

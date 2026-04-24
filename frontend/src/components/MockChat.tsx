@@ -37,9 +37,9 @@ const getInitialMessages = (
 };
 
 const MALAY_WORDS =
-  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
+  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tidak|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
 const EN_WORDS =
-  /\b(please|want|need|send|deliver|thank|hello|hi|yes|cancel|confirm|address|price|how|order)\b/i;
+  /\b(please|want|need|send|deliver|thank|hello|hi|yes|no|cancel|confirm|address|price|how|order)\b/i;
 
 function getImmediateAck(text: string): string {
   const msHits = (text.match(MALAY_WORDS) || []).length;
@@ -62,9 +62,6 @@ function logToHint(log: string): string | null {
   return null;
 }
 
-function now() {
-  return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
-}
 
 function WhatsAppText({ text }: { text: string }) {
   function parseLine(line: string): React.ReactNode {
@@ -418,7 +415,7 @@ export default function MockChat({
                   <span className="text-[10px] text-slate-500">0:{String(m.recordingDuration ?? 1).padStart(2, "0")}</span>
                 </div>
               ) : (
-                <WhatsAppText text={m.text} />
+                <WhatsAppText text={m.text ?? ""} />
               )}
               <p className="text-right text-[10px] text-slate-400 mt-1">
                 {m.time}

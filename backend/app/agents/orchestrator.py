@@ -88,6 +88,7 @@ _MS_PARTICLES = {
 _EN_MARKERS = {
     "please", "want", "need", "send", "deliver", "thank", "hello", "hi",
     "yes", "no", "cancel", "confirm", "address", "total", "price", "how",
+    "i", "we", "the", "is", "are", "can", "do", "only", "have", "left",
 }
 
 
@@ -190,26 +191,44 @@ def _build_substitution_question(lang: str, sub_items: list[ResolvedOrderItem]) 
 def _build_quote_message(lang: str, inv: InventoryResult) -> str:
     """Build the order summary message without a second LLM call."""
     lines = []
+    partial_warnings = []
+
     if lang == "ms":
         lines.append("Berikut ringkasan pesanan anda:\n")
         for item in inv.items:
             note = " (pengganti)" if item.is_substituted else ""
             lines.append(f"• *{item.product_name}*{note} x{item.fulfilled_qty} — RM{item.line_total:.2f}")
+            if item.requested_qty and item.fulfilled_qty < item.requested_qty:
+                partial_warnings.append(
+                    f"⚠️ Malangnya, kami hanya ada *{item.fulfilled_qty} unit* {item.product_name} sahaja "
+                    f"(anda minta {item.requested_qty}). Adakah anda masih mahu membeli {item.fulfilled_qty} unit yang ada?"
+                )
+        if partial_warnings:
+            lines.append("")
+            lines.extend(partial_warnings)
         if inv.discount_applied:
             lines.append(f"\nDiskaun: -RM{inv.discount_applied:.2f}")
         lines.append(f"Penghantaran: RM{inv.delivery_fee:.2f}")
         lines.append(f"*Jumlah: RM{inv.grand_total:.2f}*")
-        lines.append("\nBalas *YA* untuk sahkan 😊")
+        lines.append("\nBalas *YA* untuk sahkan atau *TIDAK* untuk batal 😊")
     else:
         lines.append("Here's your order summary:\n")
         for item in inv.items:
             note = " (substitute)" if item.is_substituted else ""
             lines.append(f"• *{item.product_name}*{note} x{item.fulfilled_qty} — RM{item.line_total:.2f}")
+            if item.requested_qty and item.fulfilled_qty < item.requested_qty:
+                partial_warnings.append(
+                    f"⚠️ Unfortunately, we only have *{item.fulfilled_qty} units* of {item.product_name} left "
+                    f"(you requested {item.requested_qty}). Do you still want to purchase the remaining {item.fulfilled_qty}?"
+                )
+        if partial_warnings:
+            lines.append("")
+            lines.extend(partial_warnings)
         if inv.discount_applied:
             lines.append(f"\nDiscount: -RM{inv.discount_applied:.2f}")
         lines.append(f"Delivery: RM{inv.delivery_fee:.2f}")
         lines.append(f"*Total: RM{inv.grand_total:.2f}*")
-        lines.append("\nReply *YES* to confirm 😊")
+        lines.append("\nReply *YES* to confirm or *NO* to cancel 😊")
     return "\n".join(lines)
 
 
@@ -539,6 +558,49 @@ async def _handle_previous_order_reference(
     return msg
 
 
+async def _handle_restock_reply(
+    raw_text: str,
+    restock_order: OrderRow,
+    customer: CustomerRow,
+) -> str:
+    import json as _json
+    try:
+        notes_data = _json.loads(restock_order.order_notes or "{}")
+    except Exception:
+        notes_data = {}
+    lang = notes_data.get("language", "ms")
+    items = notes_data.get("items", "the item(s)")
+
+    decision = _is_confirmation(raw_text)
+    await supabase_service.update_order_status(restock_order.order_id, OrderStatus.EXPIRED)
+
+    if decision is True:
+        if lang == "ms":
+            msg = f"Terima kasih! Kami akan hubungi anda apabila {items} telah diisi semula 📦 Selamat menunggu!"
+        else:
+            msg = f"Got it! We'll message you when {items} is back in stock 📦 Stay tuned!"
+    elif decision is False:
+        if lang == "ms":
+            msg = "Ok, tiada masalah! Hubungi kami bila-bila masa untuk membuat pesanan baru 😊"
+        else:
+            msg = "No problem! Feel free to place a new order anytime 😊"
+    else:
+        if lang == "ms":
+            msg = "Maaf, saya tidak faham. Balas *YA* jika nak kami maklumkan bila stok ada, atau *TIDAK* untuk batal."
+        else:
+            msg = "Sorry, I didn't catch that. Reply *YES* to be notified when back in stock, or *NO* to cancel."
+        return msg
+
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=restock_order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=msg,
+    )
+    return msg
+
+
 async def _handle_repeat_order_reply(
     raw_text: str,
     repeat_order: OrderRow,
@@ -843,13 +905,32 @@ async def _handle_new_order(
         f"Total: RM{inventory.grand_total:.2f}"
     )
 
+    import json
+
     if not inventory.order_feasible or not inventory.items:
-        # Use the AI's quote_message if it has one (e.g. explains which items are out of stock)
-        # otherwise fall back to a generic message
-        fallback = inventory.quote_message or (
-            "Maaf, kami tidak dapat memproses pesanan ini sekarang. "
-            "Sila cuba lagi sebentar. / "
-            "Sorry, we couldn't process this order right now. Please try again in a moment."
+        # All items out of stock — offer restock notification
+        item_names = ", ".join(f"*{i.product_name}*" for i in (inventory.items or intake.items)) or "the item(s)"
+        if lang == "ms":
+            fallback = (
+                f"Maaf, {item_names} sudah habis stok buat masa ini 😔\n\n"
+                "Kami boleh menghantar mesej kepada anda apabila stok tiba semula.\n"
+                "Balas *YA* jika anda ingin menerima notifikasi, atau *TIDAK* untuk batal."
+            )
+        else:
+            fallback = (
+                f"Sorry, {item_names} is currently out of stock 😔\n\n"
+                "We can send you a message once it is restocked.\n"
+                "Reply *YES* if you would like to receive a notification, or *NO* to skip."
+            )
+        # Save pending order so YES/NO reply is intercepted
+        await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=0,
+            order_notes=json.dumps({"restock_notification": True, "language": lang, "items": item_names}),
+            confidence_score=0.8,
+            requires_human_review=False,
+            status=OrderStatus.PENDING,
         )
         await supabase_service.log_message(
             customer_id=customer.customer_id,
@@ -859,7 +940,49 @@ async def _handle_new_order(
         )
         return fallback
 
-    import json
+    # Items with zero fulfillment and not substituted — out of stock with no substitute
+    no_sub_items = [
+        i for i in inventory.items
+        if i.fulfilled_qty == 0 and not i.is_substituted
+    ]
+    if no_sub_items:
+        names = ", ".join(f"*{i.product_name}*" for i in no_sub_items)
+        # Remove these items — we can't fulfill them at all
+        inventory.items = [i for i in inventory.items if not (i.fulfilled_qty == 0 and not i.is_substituted)]
+        if lang == "ms":
+            restock_msg = (
+                f"Kami tidak mempunyai pengganti yang sesuai untuk {names} buat masa ini.\n\n"
+                "Maaf atas kesulitan ini 😔 Kami boleh menghantar mesej kepada anda apabila stok tiba semula.\n"
+                "Balas *YA* jika anda ingin menerima notifikasi, atau *TIDAK* untuk batal."
+            )
+        else:
+            restock_msg = (
+                f"We don't have a suitable substitute for {names} right now.\n\n"
+                "Sorry for the inconvenience 😔 We can send you a message once it is restocked.\n"
+                "Reply *YES* if you would like to receive a notification, or *NO* to skip."
+            )
+        # Save a Pending order so YES/NO reply is intercepted
+        await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=0,
+            order_notes=json.dumps({"restock_notification": True, "language": lang, "items": names}),
+            confidence_score=0.8,
+            requires_human_review=False,
+            status=OrderStatus.PENDING,
+        )
+
+        if not inventory.items:
+            # All items unavailable — just send restock message
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                sender_type="agent",
+                message_type="text",
+                content=restock_msg,
+            )
+            return restock_msg
+        # Some items still available — send restock note then continue with the rest
+        await _send_intermediate(customer, restock_msg)
 
     # Substitution needed — ask buyer BEFORE generating the full quote
     sub_items = [i for i in inventory.items if i.is_substituted]
@@ -1078,30 +1201,67 @@ async def handle_incoming_message(
 
     # 3. Route based on current conversation state
     emit("📋 [State] Checking conversation state...")
+    restock_order = await supabase_service.get_restock_pending_order(customer.customer_id)
     repeat_order = await supabase_service.get_repeat_pending_order(customer.customer_id)
     sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
 
-    if repeat_order:
+    # Resolve the message text early so we can inspect it for routing decisions
+    raw_text = await _resolve_to_text(message_type, text_content, media_url)
+
+    # Auto-expire pending orders that are:
+    # (a) older than 30 minutes, OR
+    # (b) for substitution/confirmation: message is NOT a YES/NO reply (i.e. it's a new order)
+    from datetime import datetime, timezone, timedelta
+    _stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    def _is_stale_dt(order: OrderRow) -> bool:
+        try:
+            created = datetime.fromisoformat(order.created_at.replace("Z", "+00:00"))
+            return created < _stale_cutoff
+        except Exception:
+            return False
+
+    _is_confirm_reply = _is_confirmation(raw_text) is not None  # True/False = YES/NO, not None
+
+    for _order, _label in [
+        (restock_order, "restock"), (repeat_order, "repeat"),
+        (sub_order, "substitution"), (pending_order, "confirmation"),
+    ]:
+        if not _order:
+            continue
+        _expire = False
+        if _is_stale_dt(_order):
+            emit(f"⏰ [State] Expiring stale {_label} order {_order.order_id[:8]} (>30 min old)")
+            _expire = True
+        elif _label in ("substitution", "confirmation") and not _is_confirm_reply:
+            # Message looks like a new order, not a YES/NO — discard the old state
+            emit(f"🔄 [State] New order detected — discarding pending {_label} order {_order.order_id[:8]}")
+            _expire = True
+        if _expire:
+            await supabase_service.update_order_status(_order.order_id, OrderStatus.EXPIRED)
+            if _order is restock_order: restock_order = None
+            if _order is repeat_order: repeat_order = None
+            if _order is sub_order: sub_order = None
+            if _order is pending_order: pending_order = None
+
+    if restock_order:
+        emit(f"📋 [State] Awaiting restock notification reply — order {restock_order.order_id[:8]}...")
+        final = await _handle_restock_reply(raw_text, restock_order, customer)
+    elif repeat_order:
         emit(f"📋 [State] Awaiting repeat order clarification — order {repeat_order.order_id[:8]}...")
-        raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_repeat_order_reply(raw_text, repeat_order, customer, merchant_id)
     elif sub_order:
         emit(f"📋 [State] Awaiting substitution reply — order {sub_order.order_id[:8]}...")
-        raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_substitution_reply(raw_text, sub_order, customer)
     elif pending_order:
         emit(f"📋 [State] Awaiting confirmation reply — order {pending_order.order_id[:8]}...")
-        raw_text = await _resolve_to_text(message_type, text_content, media_url)
         final = await _handle_confirmation_reply(raw_text, pending_order, customer)
     else:
         emit("📋 [State] No pending order — treating as new order request")
         # Send immediate ack so the customer knows we received their message
         lang = _detect_language(text_content or "")
         await _send_intermediate(customer, _ack_received(message_type, lang))
-
-        # 4. Pre-process media to text
-        raw_text = await _resolve_to_text(message_type, text_content, media_url)
 
         if not raw_text.strip():
             final = (
