@@ -31,7 +31,7 @@ Return ONLY a valid JSON object:
   "discount_applied": 0.00,
   "delivery_fee": 15.00,
   "grand_total": 92.70,
-  "quote_message": "Hi! Here is your order summary:\n✅ Minyak Masak 5L x3 — RM77.70\n🚚 Delivery fee: RM15.00\n💰 **Total: RM92.70**\n\nReply *YES* to confirm or let me know if you'd like to change anything!",
+  "quote_message": "Berikut ringkasan pesanan anda:\n\n• *Minyak Masak 5L* x3 — RM77.70\n\nPenghantaran: RM15.00\n*Jumlah: RM92.70*\n\nBalas *YA* untuk sahkan 😊",
   "requires_substitution": false,
   "notes": null
 }
@@ -52,36 +52,64 @@ Return ONLY a valid JSON object:
 
 ## Quote Message Guidelines
 - Use the **buyer's language** (Malay/English/mixed)
-- Be concise, friendly, and use WhatsApp-appropriate formatting (bold with *, emoji OK)
-- Always end with a clear call-to-action: reply YES to confirm
-- For substitution: apology sentence first, then propose substitute clearly (see examples below)
+- Keep it clean and easy to scan — use bullet points (•) for items, bold for product names and totals
+- Use at most 1–2 emoji in the whole message — do NOT put emoji on every line
+- Always end with a short call-to-action: reply YES to confirm
+- For substitution: apology sentence first, then propose substitute on the next line
+
+## Example Quote (Malay, normal order)
+```
+Berikut ringkasan pesanan anda:
+
+• *Ayam Gred A (Grade A Chicken)* x60 — RM510.00
+• *Halia (Ginger)* x15 — RM60.00
+• *Cili Api (Bird's Eye Chilli)* x10 — RM120.00
+
+Penghantaran: RM15.00
+*Jumlah: RM765.00*
+
+Balas *YA* untuk sahkan 😊
+```
 
 ## Example Quote (Malay, with substitution)
 ```
-Salam! Berikut ringkasan pesanan anda:
+Berikut ringkasan pesanan anda:
 
-✅ Ayam Gred A (Grade A Chicken) x20 — RM170.00
+• *Ayam Gred A (Grade A Chicken)* x20 — RM170.00
 
-Maaf, stok *Ayam Gred A* hanya tinggal 20 ekor sahaja. Boleh kami cadangkan *Ayam Gred B (Grade B Chicken)* sebagai pengganti untuk baki 30 ekor?
-✅ Ayam Gred B (Grade B Chicken) x30 — RM108.00
+Maaf, stok *Ayam Gred A* hanya tinggal 20 ekor. Boleh kami cadangkan *Ayam Gred B* sebagai pengganti untuk baki 30 ekor?
+• *Ayam Gred B (Grade B Chicken)* x30 — RM108.00 (pengganti)
 
-🚚 Bayaran penghantaran: RM15.00
-💰 *Jumlah: RM293.00*
+Penghantaran: RM15.00
+*Jumlah: RM293.00*
 
 Balas *YA* untuk sahkan atau beritahu kami jika ada perubahan 😊
 ```
 
+## Example Quote (English, normal order)
+```
+Here's your order summary:
+
+• *Grade A Chicken* x60 — RM510.00
+• *Ginger* x15 — RM60.00
+
+Delivery: RM15.00
+*Total: RM765.00*
+
+Reply *YES* to confirm 😊
+```
+
 ## Example Quote (English, with substitution)
 ```
-Hi! Here's your order summary:
+Here's your order summary:
 
-✅ Grade A Chicken x20 — RM170.00
+• *Grade A Chicken* x20 — RM170.00
 
-Sorry, we only have 20 units of *Grade A Chicken* in stock. May we suggest *Grade B Chicken* as a replacement for the remaining 30 units?
-✅ Grade B Chicken x30 — RM108.00
+Sorry, we only have 20 units of *Grade A Chicken* in stock. We suggest *Grade B Chicken* as a replacement for the remaining 30 units.
+• *Grade B Chicken* x30 — RM108.00 (substitute)
 
-🚚 Delivery fee: RM15.00
-💰 *Total: RM293.00*
+Delivery: RM15.00
+*Total: RM293.00*
 
-Reply *YES* to confirm or let us know if you'd like to make changes 😊
+Reply *YES* to confirm or let us know if you'd like changes 😊
 ```

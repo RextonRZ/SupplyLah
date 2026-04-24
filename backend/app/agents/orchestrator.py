@@ -71,15 +71,32 @@ def ensure_inventory_worker() -> None:
 # ─────────────────────────────────────────
 
 _MS_PARTICLES = {
-    "nak", "minta", "boleh", "hantar", "bagi", "saya", "kami", "boss", "lah",
-    "la", "ya", "tolong", "barang", "kg", "botol", "beg", "kotak", "unit",
-    "order", "pesanan", "stok", "harga",
+    "nak", "nk", "minta", "boleh", "hantar", "bagi", "saya", "kami", "boss",
+    "lah", "la", "ya", "yea", "tolong", "barang", "kg", "botol", "beg",
+    "kotak", "unit", "order", "pesanan", "stok", "harga", "jap", "ok",
+    "ni", "tu", "dengan", "untuk", "dan", "ke", "dari", "ekor", "biji",
+    "sahaja", "je", "je", "dah", "tak", "tahu", "tau", "faham", "betul",
+    "terima", "kasih", "maaf", "selamat", "jalan", "taman", "lorong",
+}
+
+# English-only markers — if any appear, lean English
+_EN_MARKERS = {
+    "please", "want", "need", "send", "deliver", "thank", "hello", "hi",
+    "yes", "no", "cancel", "confirm", "address", "total", "price", "how",
 }
 
 
 def _detect_language(text: str) -> str:
     words = set(text.lower().split())
-    return "ms" if words & _MS_PARTICLES else "en"
+    ms_hits = len(words & _MS_PARTICLES)
+    en_hits = len(words & _EN_MARKERS)
+    if ms_hits > en_hits:
+        return "ms"
+    if en_hits > ms_hits:
+        return "en"
+    # Ambiguous (short messages like "60", "YA", numbers, addresses) —
+    # default to Malay since this is a Malaysian wholesale platform
+    return "ms"
 
 
 def _ack_received(msg_type: MessageType, lang: str) -> str:
@@ -90,10 +107,11 @@ def _ack_received(msg_type: MessageType, lang: str) -> str:
     return "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..." if lang == "ms" else "On it! 🔍 Processing your order, give me a sec..."
 
 
-def _ack_checking_stock(lang: str, items_preview: str) -> str:
+def _ack_checking_stock(lang: str, items: list) -> str:
+    bullets = "\n".join(f"• *{i.product_name}* x{i.quantity}" for i in items)
     if lang == "ms":
-        return f"Ok faham! *{items_preview}* — tengah semak stok sekarang 📦"
-    return f"Got it! Checking stock for *{items_preview}* now... 📦"
+        return f"Ok faham! Tengah semak stok sekarang 📦\n\n{bullets}"
+    return f"Got it! Checking stock now 📦\n\n{bullets}"
 
 
 async def _send_intermediate(
@@ -235,12 +253,16 @@ async def _handle_new_order(
     lang = intake.language_detected or "ms"
     addr = (intake.delivery_address or "").strip()
     if not addr:
-        msg = (
-            "Boleh berikan alamat penghantaran yang lengkap? 📍\n"
-            "Contoh: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur\n\n"
-            "/ Could you share your full delivery address? 📍\n"
-            "Example: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur"
-        )
+        if lang == "ms":
+            msg = (
+                "Terima kasih! Boleh berikan alamat penghantaran yang lengkap? 📍\n"
+                "Contoh: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur"
+            )
+        else:
+            msg = (
+                "Thanks! Could you share your full delivery address? 📍\n"
+                "Example: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur"
+            )
         emit("📍 [Orchestrator] No delivery address — asking buyer")
         await supabase_service.log_message(
             customer_id=customer.customer_id,
@@ -253,14 +275,11 @@ async def _handle_new_order(
     emit(f"📍 [Orchestrator] Delivery address: {addr}")
 
     # Step 2: Notify customer we're checking stock
-    items_preview = ", ".join(
-        f"{i.quantity}x {i.product_name}" for i in intake.items
-    )
-    ack_stock_msg = _ack_checking_stock(lang, items_preview)
+    ack_stock_msg = _ack_checking_stock(lang, intake.items)
     await _send_intermediate(customer, ack_stock_msg)
-    emit(f"📱 [WhatsApp] Sent to buyer: \"{ack_stock_msg[:70]}{'…' if len(ack_stock_msg) > 70 else ''}\"")
+    emit(f"📱 [WhatsApp] Sent: \"{ack_stock_msg.split(chr(10))[0]}\"")
 
-    # Step 2: Inventory Agent
+    # Step 3: Inventory Agent
     emit(f"📦 [InventoryAgent] Checking stock for {len(intake.items)} item(s)...")
     inventory = await run_inventory_agent(intake, merchant_id, intake.language_detected)
     emit(

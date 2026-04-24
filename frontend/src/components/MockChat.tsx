@@ -13,9 +13,15 @@ const DEMO_PHONE = "+60198765432";
 const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
 // Mirrors the backend's _ack_received() so we can show it immediately
-const MALAY_WORDS = /\b(nak|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna)\b/i;
+const MALAY_WORDS = /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
+const EN_WORDS = /\b(please|want|need|send|deliver|thank|hello|hi|yes|cancel|confirm|address|price|how|order)\b/i;
+
 function getImmediateAck(text: string): string {
-  return MALAY_WORDS.test(text)
+  const msHits = (text.match(MALAY_WORDS) || []).length;
+  const enHits = (text.match(EN_WORDS) || []).length;
+  // Default to Malay for ambiguous/short messages (Malaysian platform)
+  const isMalay = msHits >= enHits;
+  return isMalay
     ? "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..."
     : "On it! 🔍 Processing your order, give me a sec...";
 }
@@ -35,6 +41,37 @@ function logToHint(log: string): string | null {
 
 function now() {
   return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Renders WhatsApp-style formatting: *bold*, _italic_, line breaks, paragraph spacing
+function WhatsAppText({ text }: { text: string }) {
+  function parseLine(line: string): React.ReactNode {
+    const segments = line.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
+    return segments.map((seg, i) => {
+      if (seg.startsWith("*") && seg.endsWith("*") && seg.length > 2)
+        return <strong key={i} className="font-semibold">{seg.slice(1, -1)}</strong>;
+      if (seg.startsWith("_") && seg.endsWith("_") && seg.length > 2)
+        return <em key={i}>{seg.slice(1, -1)}</em>;
+      return <span key={i}>{seg}</span>;
+    });
+  }
+
+  // Split into paragraphs on blank lines, then lines within each paragraph
+  const paragraphs = text.split(/\n{2,}/);
+  return (
+    <div className="space-y-2 leading-relaxed">
+      {paragraphs.map((para, pi) => {
+        const lines = para.split("\n").filter(l => l !== undefined);
+        return (
+          <div key={pi} className="space-y-0.5">
+            {lines.map((line, li) => (
+              <div key={li}>{parseLine(line)}</div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function MockChat({
@@ -213,7 +250,7 @@ export default function MockChat({
                   : "bg-white text-slate-800 rounded-tl-sm"
               }`}
             >
-              <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
+              <WhatsAppText text={m.text} />
               <p className="text-right text-[10px] text-slate-400 mt-0.5">{m.time}</p>
             </div>
           </div>
