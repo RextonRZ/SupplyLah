@@ -231,8 +231,28 @@ async def _handle_new_order(
         )
         return msg
 
-    # Step 1.5: Notify customer we're checking stock
+    # Step 1.5: Validate delivery address — ask if missing or too vague
     lang = intake.language_detected or "ms"
+    addr = (intake.delivery_address or "").strip()
+    if not addr:
+        msg = (
+            "Boleh berikan alamat penghantaran yang lengkap? 📍\n"
+            "Contoh: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur\n\n"
+            "/ Could you share your full delivery address? 📍\n"
+            "Example: No 12, Jalan ABC, Taman XYZ, 50000 Kuala Lumpur"
+        )
+        emit("📍 [Orchestrator] No delivery address — asking buyer")
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
+
+    emit(f"📍 [Orchestrator] Delivery address: {addr}")
+
+    # Step 2: Notify customer we're checking stock
     items_preview = ", ".join(
         f"{i.quantity}x {i.product_name}" for i in intake.items
     )
