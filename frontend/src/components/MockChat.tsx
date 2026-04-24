@@ -208,7 +208,7 @@ export default function MockChat({
         if (i > 0) await new Promise((r) => setTimeout(r, 800));
         setMessages((prev) => [
           ...prev,
-          { role: "system", text: replies[i], time: now() },
+          { role: "agent", text: replies[i], time: now() },
         ]);
         onLog?.(`AI Agent: ${replies[i].substring(0, 60)}...`);
       }
@@ -217,7 +217,7 @@ export default function MockChat({
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: "system", text: "⚠ Voice processing failed.", time: now() },
+        { role: "agent", text: "⚠ Voice processing failed.", time: now() },
       ]);
     } finally {
       setLoading(false);

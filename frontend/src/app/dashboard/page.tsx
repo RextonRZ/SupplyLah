@@ -1983,7 +1983,6 @@ export default function Dashboard() {
                     fromName={demoName}
                     shopName={profile.businessName || "Demo Wholesaler"}
                     onLog={addLog}
-                    onClearLogs={clearAiLogs}
                   />
                 </div>
               </div>
