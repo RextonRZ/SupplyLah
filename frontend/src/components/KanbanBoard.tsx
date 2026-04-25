@@ -5,7 +5,7 @@ import OrderCard from "./OrderCard";
 
 interface Props {
   orders: Order[];
-  onRefresh: () => void;
+  onRefresh: (msg?: string, log?: string) => void;
   onSelectOrder?: (order: Order) => void;
 }
 

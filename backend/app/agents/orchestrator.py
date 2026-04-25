@@ -1432,6 +1432,25 @@ async def handle_incoming_message(
     emit(f"👤 [CRM] Looking up customer: {from_number}...")
     customer = await supabase_service.get_or_create_customer(from_number, merchant_id)
     emit(f"👤 [CRM] Customer found — ID ...{customer.customer_id[-8:]}")
+    
+    # This is the "Rest Async State" - it prevents AI from even parsing the message
+    pending_orders = await supabase_service.get_orders_with_details(merchant_id, limit=10)
+    # Find if THIS specific customer has an active order flagged for review
+    review_order = next((o for o in pending_orders 
+                        if o['customer_id'] == customer.customer_id 
+                        and o.get('requires_human_review') == True
+                        and o.get('order_status') not in ['Confirmed', 'Failed', 'Expired']), None)
+    
+    if review_order:
+        emit("🔒 [State] Order is locked for Human Review. AI is on standby.")
+        lang = _detect_language(text_content or "")
+        final = (
+            "Sila tunggu sebentar, ejen manusia kami sedang menyemak pesanan anda dan akan membalas tidak lama lagi! 🙏" if lang == "ms"
+            else "Please wait a moment, our human agent is reviewing your order and will be with you shortly! 🙏"
+        )
+        # We log and return immediately to prevent the AI agents from running
+        await supabase_service.log_message(customer.customer_id, "agent", "text", final, order_id=review_order['order_id'])
+        return final
 
     # 2. Log inbound message
     await supabase_service.log_message(

@@ -2038,6 +2038,20 @@ export default function Dashboard() {
     setLoading(false);
   }, []);
 
+  const handleManualAction = async (msg?: string, log?: string) => {
+    // 1. Instantly show the human's message in the Mock Chat window
+    if (msg) {
+      const now = new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
+      setChatMessages((prev) =>[...prev, { role: "agent", text: msg, time: now }]);
+    }
+    // 2. Instantly show the action in the AI reasoning panel
+    if (log) {
+      addLog(log);
+    }
+    // 3. Refresh the Kanban board
+    if (merchantId) await fetchData(merchantId);
+  };
+
   const handleClearChat = useCallback(() => {
     // We'll let MockChat define the "Initial Message" or just set to empty
     setChatMessages([]);
@@ -2271,7 +2285,8 @@ export default function Dashboard() {
                 <div className="lg:col-span-3">
                   <KanbanBoard
                     orders={orders}
-                    onRefresh={() => merchantId && fetchData(merchantId)}
+                   // onRefresh={() => merchantId && fetchData(merchantId)}
+                    onRefresh={handleManualAction}
                     onSelectOrder={(order) => setSelectedOrderForReview(order)}
                   />
                 </div>
@@ -2537,7 +2552,8 @@ export default function Dashboard() {
             <OrderReviewModal
               order={selectedOrderForReview}
               onClose={() => setSelectedOrderForReview(null)}
-              onSave={() => merchantId && fetchData(merchantId)}
+              // onSave={() => merchantId && fetchData(merchantId)}
+              onSave={handleManualAction}
             />
           )}
         </main>

@@ -1,5 +1,6 @@
 """Dashboard API routes — order management, inventory, stats."""
 from __future__ import annotations
+from app.services.log_stream import emit, emit_message 
 
 import json
 import logging
@@ -261,6 +262,9 @@ async def resolve_order(payload: ResolveOrderRequest):
 
     await twilio_service.send_whatsapp_message(customer_phone, msg)
     
+    emit_message(msg) 
+    emit(f"👤 [Human Intervention] Order #{payload.order_id[:8]} resolved manually.")
+    
     # 5. Log the intervention
     log_entry = f"📝 [Manual Review] Resolved. Status: {payload.status}. New Amount: RM{payload.amount:.2f}"
     if payload.amount < 50:
@@ -274,7 +278,12 @@ async def resolve_order(payload: ResolveOrderRequest):
         content=log_entry
     )
 
-    return {"success": True, "order_id": payload.order_id}
+    return {
+        "success": True, 
+        "order_id": payload.order_id, 
+        "message": msg, 
+        "log": log_entry
+    }
 
 @dashboard_router.patch("/orders/{order_id}/override")
 async def override_order(order_id: str, body: OverrideRequest):
@@ -292,6 +301,10 @@ async def override_order(order_id: str, body: OverrideRequest):
         }
     )
     
+    msg = ""
+    log_entry = ""
+    
+    
     # 2. Handle Notification for Rejections
     if body.status in ["Failed", "Expired"]:
         order = await supabase_service.get_order_by_id(order_id)
@@ -305,6 +318,10 @@ async def override_order(order_id: str, body: OverrideRequest):
                 else "Sorry, your order cannot be processed at this time. Thank you! 😊"
             )
             await twilio_service.send_whatsapp_message(customer_phone, msg)
+            log_entry = f"🚫 [Human Intervention] Order {body.status} by operator."
+            
+            emit_message(msg)
+            emit(f"🚫 [Human Intervention] Order #{order_id[:8]} rejected by staff.")
             
             await supabase_service.log_message(
                 customer_id=order['customer_id'],
@@ -314,4 +331,11 @@ async def override_order(order_id: str, body: OverrideRequest):
                 content=msg
             )
 
-    return {"success": True, "order_id": order_id, "new_status": body.status}
+    # 🔴 ADD THIS RETURN
+    return {
+        "success": True, 
+        "order_id": order_id, 
+        "new_status": body.status, 
+        "message": msg, 
+        "log": log_entry
+    }

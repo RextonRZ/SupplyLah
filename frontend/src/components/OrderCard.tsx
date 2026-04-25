@@ -7,7 +7,7 @@ import { BACKEND_URL } from "@/lib/supabase";
 
 interface Props {
   order: Order;
-  onOverride?: () => void;
+  onOverride?: (msg?: string, log?: string) => void;
   onSelectOrder?: (order: Order) => void;
 }
 
@@ -36,8 +36,9 @@ export default function OrderCard({ order, onOverride, onSelectOrder }: Props) {
         }),
       });
       
+      const data = await res.json();
       if (res.ok) {
-        onOverride?.(); // This refreshes the Kanban board in Dashboard.tsx
+        onOverride?.(data.message, data.log); // This refreshes the Kanban board in Dashboard.tsx
       }
     } catch (err) {
       console.error("Override failed:", err);

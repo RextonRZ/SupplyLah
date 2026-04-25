@@ -11,7 +11,7 @@ export default function OrderReviewModal({
 }: {
   order: Order;
   onClose: () => void;
-  onSave: () => void;
+  onSave: (msg?: string, log?: string) => void;
 }) {
   const [logs, setLogs] = useState<any[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -79,8 +79,10 @@ export default function OrderReviewModal({
         }),
       });
 
+      const data = await response.json()
+
       if (response.ok) {
-        onSave();
+        onSave(data.message, data.log);
         onClose();
       }
     } catch (err) {
