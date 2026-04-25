@@ -119,7 +119,7 @@ export default function AuthCallbackPage() {
     if (password.length < 8) { setErrMsg("Password must be at least 8 characters."); return; }
     if (password !== confirm) { setErrMsg("Passwords don't match."); return; }
     setStatus("saving");
-    const { error } = await supabase.auth.updateUser({ password, data: { full_name: name.trim() } });
+    const { error } = await supabase.auth.updateUser({ password, data: { full_name: name.trim(), onboarding_complete: true } });
     if (error) { setErrMsg(error.message); setStatus("set-password"); }
   }
 
