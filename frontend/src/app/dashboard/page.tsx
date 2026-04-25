@@ -1014,14 +1014,16 @@ function Toggle({
   onChange,
   label,
   desc,
+  disabled,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
   label: string;
   desc: string;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-5">
+    <div className={`flex items-start justify-between gap-6 py-5 ${disabled ? "opacity-70" : ""}`}>
       <div>
         <p className="text-sm font-semibold text-slate-800">{label}</p>
         <p className="text-xs text-slate-500 mt-0.5 leading-relaxed max-w-sm">
@@ -1030,8 +1032,9 @@ function Toggle({
       </div>
       <button
         type="button"
+        disabled={disabled}
         onClick={() => onChange(!on)}
-        className={`relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none mt-0.5 ${on ? "bg-teal-500" : "bg-slate-200"}`}
+        className={`relative shrink-0 w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none mt-0.5 ${on ? (disabled ? "bg-teal-300" : "bg-teal-500") : "bg-slate-200"} ${disabled ? "cursor-not-allowed cursor-pointer" : "cursor-pointer"}`}
       >
         <span
           className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${on ? "translate-x-5" : "translate-x-0"}`}
@@ -1045,10 +1048,12 @@ function RulesAdminTab({
   merchantId,
   products,
   inventoryLoading,
+  userRole,
 }: {
   merchantId: string;
   products: Product[];
   inventoryLoading: boolean;
+  userRole: "owner" | "Warehouse Manager" | "Wholesale Supplier";
 }) {
   const [rules, setRules] = useState<Rules>(defaultRules);
   const [saving, setSaving] = useState(false);
@@ -1149,21 +1154,32 @@ function RulesAdminTab({
     setSaving(false);
   }
 
+  const isViewOnly = userRole !== "owner";
+
   if (loading || inventoryLoading) return <TabSkeleton rows={5} cols={3} />;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex justify-between items-center mb-2">
+      <div className="flex items-center gap-3 mb-2">
         <h2 className="text-xl font-bold text-slate-900">
           Manage Business Rules
         </h2>
-        <button
-          onClick={save}
-          disabled={saving}
-          className="btn-primary px-6 py-2.5 font-bold w-32 justify-center"
-        >
-          {saving ? "Saving..." : "Save Rules"}
-        </button>
+        {isViewOnly && (
+          <span className="bg-slate-100 text-slate-600 text-xs px-2.5 py-1 rounded-full font-semibold border border-slate-200">
+            View Only
+          </span>
+        )}
+        <div className="ml-auto">
+          {!isViewOnly && (
+            <button
+              onClick={save}
+              disabled={saving}
+              className="btn-primary px-6 py-2.5 font-bold w-32 justify-center"
+            >
+              {saving ? "Saving..." : "Save Rules"}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-white p-6 rounded-2xl border border-slate-200">
@@ -1183,10 +1199,11 @@ function RulesAdminTab({
             <input
               type="number"
               min="0"
+              disabled={isViewOnly}
               value={rules.minOrderValue}
               onChange={(e) => set("minOrderValue", e.target.value)}
               placeholder="50"
-              className="w-28 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300"
+              className={`w-28 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300 ${isViewOnly ? "bg-slate-50 cursor-not-allowed opacity-70" : ""}`}
             />
           </div>
         </div>
@@ -1197,6 +1214,7 @@ function RulesAdminTab({
             onChange={(v) => set("allowDiscount", v)}
             label="Allow substitution discount"
             desc="When an item is out of stock, offer an alternative at a slight discount rather than rejecting the order."
+            disabled={isViewOnly}
           />
           {rules.allowDiscount && products.length > 0 && (
             <div className="mt-2 text-sm">
@@ -1247,13 +1265,14 @@ function RulesAdminTab({
                         <td className="px-4 py-3">
                           <select
                             value={resolvedSubId}
+                            disabled={isViewOnly}
                             onChange={(e) => {
                               const val = e.target.value;
                               updateSub(p.product_id, "substitute_id", val);
                               if (val === "N/A")
                                 updateSub(p.product_id, "discount", "");
                             }}
-                            className="w-full max-w-[200px] px-2 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            className={`w-full max-w-[200px] px-2 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 ${isViewOnly ? "bg-slate-50 cursor-not-allowed opacity-70" : ""}`}
                           >
                             <option value="N/A">N/A</option>
                             {products
@@ -1279,6 +1298,7 @@ function RulesAdminTab({
                                 type="number"
                                 min="0"
                                 max="100"
+                                disabled={isViewOnly}
                                 value={sub.discount || ""}
                                 onChange={(e) =>
                                   updateSub(
@@ -1287,7 +1307,7 @@ function RulesAdminTab({
                                     e.target.value,
                                   )
                                 }
-                                className="w-16 px-2 py-1.5 rounded-lg border border-slate-200 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
+                                className={`w-16 px-2 py-1.5 rounded-lg border border-slate-200 text-slate-900 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 ${isViewOnly ? "bg-slate-50 cursor-not-allowed opacity-70" : ""}`}
                                 placeholder="10"
                               />
                               <span className="text-xs text-slate-500">%</span>
@@ -1315,6 +1335,7 @@ function RulesAdminTab({
             onChange={(v) => set("chargeDelivery", v)}
             label="Pass delivery fee to customer"
             desc="Include the Lalamove delivery charge in the order total sent to the buyer."
+            disabled={isViewOnly}
           />
           {rules.chargeDelivery && (
             <div className="pb-4 flex items-center gap-3">
@@ -1323,9 +1344,10 @@ function RulesAdminTab({
               <input
                 type="number"
                 min="0"
+                disabled={isViewOnly}
                 value={rules.deliveryFee}
                 onChange={(e) => set("deliveryFee", e.target.value)}
-                className="w-20 px-3 py-2 rounded-lg border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+                className={`w-20 px-3 py-2 rounded-lg border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent ${isViewOnly ? "bg-slate-50 cursor-not-allowed opacity-70" : ""}`}
               />
               <span className="text-xs text-slate-400">
                 Leave 0 to use live Lalamove pricing
@@ -1344,10 +1366,11 @@ function RulesAdminTab({
           </p>
           <textarea
             rows={5}
+            disabled={isViewOnly}
             value={rules.customRules || ""}
             onChange={(e) => set("customRules", e.target.value)}
             placeholder={`Examples:\n- Spend above RM500 and get 5% discount\n- Free delivery for orders above RM300\n- No orders accepted on Sundays\n- Bulk purchase of 100+ units gets 8% off`}
-            className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300 resize-none font-mono leading-relaxed"
+            className={`w-full px-3 py-2.5 rounded-xl border border-slate-200 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300 resize-none font-mono leading-relaxed ${isViewOnly ? "bg-slate-50 cursor-not-allowed opacity-70" : ""}`}
           />
         </div>
       </div>
@@ -1370,11 +1393,13 @@ function InventoryAdminTab({
   inventory,
   onRefresh,
   inventoryLoading,
+  userRole,
 }: {
   merchantId: string;
   inventory: Product[];
   onRefresh: () => void;
   inventoryLoading: boolean;
+  userRole: "owner" | "Warehouse Manager" | "Wholesale Supplier";
 }) {
   const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState({
@@ -1463,21 +1488,32 @@ function InventoryAdminTab({
   const INPUT = `w-full px-2 py-1.5 bg-white border border-teal-300 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500`;
   const INPUT_ADD = `w-full px-3 py-2 bg-slate-50 border border-slate-200 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all hover:border-slate-300`;
 
+  const isViewOnly = userRole === "Wholesale Supplier";
+
   if (inventoryLoading || refreshing) return <TabSkeleton rows={6} cols={7} />;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex justify-between items-end">
+      <div className="flex items-center gap-3">
         <h2 className="text-xl font-bold text-slate-900">Manage Inventory</h2>
-        <button
-          onClick={() => {
-            setAdding(!adding);
-            setEditingId(null);
-          }}
-          className="btn-primary px-5 py-2 text-sm font-bold"
-        >
-          {adding ? "Cancel" : "+ Add new product"}
-        </button>
+        {isViewOnly && (
+          <span className="bg-slate-100 text-slate-600 text-xs px-2.5 py-1 rounded-full font-semibold border border-slate-200">
+            View Only
+          </span>
+        )}
+        <div className="ml-auto">
+          {!isViewOnly && (
+            <button
+              onClick={() => {
+                setAdding(!adding);
+                setEditingId(null);
+              }}
+              className="btn-primary px-5 py-2 text-sm font-bold"
+            >
+              {adding ? "Cancel" : "+ Add new product"}
+            </button>
+          )}
+        </div>
       </div>
 
       {adding && (
@@ -1655,50 +1691,52 @@ function InventoryAdminTab({
                     )}
                   </td>
                   <td className="px-5 py-3 text-right whitespace-nowrap">
-                    {isEditing ? (
-                      <div className="flex items-center justify-end gap-3">
-                        <button
-                          onClick={() => saveEdit(p.product_id)}
-                          disabled={
-                            saving ||
-                            !editRow.product_name ||
-                            !editRow.unit_price
-                          }
-                          className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-40 transition-colors"
-                        >
-                          {saving ? "Saving…" : "Save"}
-                        </button>
-                        <button
-                          onClick={() => setEditingId(null)}
-                          className="text-slate-400 hover:text-slate-600 text-xs font-bold transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-end gap-3">
-                        <button
-                          onClick={() => {
-                            setAdding(false);
-                            startEdit(p);
-                          }}
-                          className="text-teal-500 hover:text-teal-700 text-xs font-bold transition-colors"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await supabase
-                              .from("product")
-                              .delete()
-                              .eq("product_id", p.product_id);
-                            onRefresh();
-                          }}
-                          className="text-slate-400 hover:text-red-500 text-xs font-bold transition-colors"
-                        >
-                          Remove
-                        </button>
-                      </div>
+                    {!isViewOnly && (
+                      isEditing ? (
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={() => saveEdit(p.product_id)}
+                            disabled={
+                              saving ||
+                              !editRow.product_name ||
+                              !editRow.unit_price
+                            }
+                            className="text-teal-600 hover:text-teal-800 text-xs font-bold disabled:opacity-40 transition-colors"
+                          >
+                            {saving ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="text-slate-400 hover:text-slate-600 text-xs font-bold transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            onClick={() => {
+                              setAdding(false);
+                              startEdit(p);
+                            }}
+                            className="text-teal-500 hover:text-teal-700 text-xs font-bold transition-colors"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await supabase
+                                .from("product")
+                                .delete()
+                                .eq("product_id", p.product_id);
+                              onRefresh();
+                            }}
+                            className="text-slate-400 hover:text-red-500 text-xs font-bold transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )
                     )}
                   </td>
                 </tr>
@@ -1930,6 +1968,38 @@ export default function Dashboard() {
             .toUpperCase()
             .slice(0, 2) || "U";
         setProfile({ fullName, businessName, email, initials });
+        // 1. First, check if they are an invited team member (prioritize this to fix stuck accounts)
+        const { data: memberRow } = await supabase
+          .from("merchant_users")
+          .select("merchant_id, role")
+          .eq("auth_user_id", user.id)
+          .single();
+
+        let mId = memberRow?.merchant_id;
+        let role = memberRow?.role;
+
+        // Fallback: If DB trigger missed, use metadata from the invite!
+        if (!mId && meta.merchant_id && meta.role && meta.role !== "owner") {
+          mId = meta.merchant_id;
+          role = meta.role;
+        }
+
+        if (mId && role && role !== "owner") {
+          const { data: ownerMerchant } = await supabase
+            .from("merchant")
+            .select("merchant_id, company_name")
+            .eq("merchant_id", mId)
+            .single();
+          if (ownerMerchant) {
+            setProfile((p) => ({ ...p, businessName: ownerMerchant.company_name || meta.business_name || p.businessName }));
+            setMerchantId(ownerMerchant.merchant_id);
+            setUserRole(role as "Warehouse Manager" | "Wholesale Supplier");
+            setOnboardingComplete(true);
+            return;
+          }
+        }
+
+        // 2. Not a team member, check if they own a merchant
         const { data: merchant } = await supabase
           .from("merchant")
           .select("merchant_id, company_name")
@@ -1954,33 +2024,6 @@ export default function Dashboard() {
             setOnboardingComplete(true);
           }
           return;
-        }
-
-        // Not an owner — check if they're a team member invited to someone's merchant
-        const { data: memberRow } = await supabase
-          .from("merchant_users")
-          .select("merchant_id, role")
-          .eq("auth_user_id", user.id)
-          .single();
-
-        if (memberRow?.merchant_id) {
-          const { data: ownerMerchant } = await supabase
-            .from("merchant")
-            .select("merchant_id, company_name")
-            .eq("merchant_id", memberRow.merchant_id)
-            .single();
-          if (ownerMerchant) {
-            setProfile((p) => ({
-              ...p,
-              businessName: ownerMerchant.company_name || p.businessName,
-            }));
-            setMerchantId(ownerMerchant.merchant_id);
-            setUserRole(
-              memberRow.role as "Warehouse Manager" | "Wholesale Supplier",
-            );
-            setOnboardingComplete(true);
-            return;
-          }
         }
 
         // Authenticated but no merchant row yet — show empty dashboard, not demo data
@@ -2155,9 +2198,14 @@ export default function Dashboard() {
             />
           </Link>
           <div className="w-16 md:w-16 shrink-0" />
-          <span className="text-xs bg-teal-100 text-teal-700 px-3 py-1 rounded-full font-semibold whitespace-nowrap">
-            Command Centre
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs bg-teal-100 text-teal-700 px-3 py-1 rounded-full font-semibold whitespace-nowrap">
+              Command Centre
+            </span>
+            <span className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-semibold whitespace-nowrap border border-slate-200">
+              Role: {userRole === "owner" ? "Owner" : userRole}
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -2204,7 +2252,7 @@ export default function Dashboard() {
             roles: ["owner", "Warehouse Manager", "Wholesale Supplier"],
           },
           { id: "team", label: "👥 Team", roles: ["owner"] },
-          { id: "settings", label: "⚙️ Settings", roles: ["owner"] },
+          { id: "settings", label: "⚙️ Settings", roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
           { id: "demo", label: "💬 Demo Chat", roles: ["owner"] },
         ]
           .filter(({ roles }) => roles.includes(userRole))
@@ -2301,7 +2349,9 @@ export default function Dashboard() {
               </div>
 
               {/* ── Analytics ── */}
-              <AnalyticsDashboard orders={orders} inventory={inventory} />
+              {userRole !== "Wholesale Supplier" && (
+                <AnalyticsDashboard orders={orders} inventory={inventory} />
+              )}
             </>
           )}
 
@@ -2311,6 +2361,7 @@ export default function Dashboard() {
               inventory={inventory}
               onRefresh={() => fetchData(merchantId)}
               inventoryLoading={loading}
+              userRole={userRole}
             />
           )}
 
@@ -2323,6 +2374,7 @@ export default function Dashboard() {
               merchantId={merchantId}
               products={inventory}
               inventoryLoading={loading}
+              userRole={userRole}
             />
           )}
 
