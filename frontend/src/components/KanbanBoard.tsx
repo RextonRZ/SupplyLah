@@ -6,6 +6,7 @@ import OrderCard from "./OrderCard";
 interface Props {
   orders: Order[];
   onRefresh: () => void;
+  onSelectOrder?: (order: Order) => void;
 }
 
 const COL_META: Record<string, { accent: string; label: string }> = {
@@ -16,7 +17,7 @@ const COL_META: Record<string, { accent: string; label: string }> = {
   "Dispatched":            { accent: "bg-violet-500", label: "Dispatched" },
 };
 
-export default function KanbanBoard({ orders, onRefresh }: Props) {
+export default function KanbanBoard({ orders, onRefresh, onSelectOrder }: Props) {
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       {/* Header */}
@@ -51,7 +52,7 @@ export default function KanbanBoard({ orders, onRefresh }: Props) {
                   </div>
                 ) : (
                   col.map((order) => (
-                    <OrderCard key={order.order_id} order={order} onOverride={onRefresh} />
+                    <OrderCard key={order.order_id} order={order} onOverride={onRefresh} onSelectOrder={onSelectOrder} />
                   ))
                 )}
               </div>

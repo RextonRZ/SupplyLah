@@ -8,9 +8,10 @@ import { BACKEND_URL } from "@/lib/supabase";
 interface Props {
   order: Order;
   onOverride?: () => void;
+  onSelectOrder?: (order: Order) => void;
 }
 
-export default function OrderCard({ order, onOverride }: Props) {
+export default function OrderCard({ order, onOverride, onSelectOrder }: Props) {
   const [expanded,   setExpanded]   = useState(false);
   const [overriding, setOverriding] = useState(false);
 
@@ -88,11 +89,10 @@ export default function OrderCard({ order, onOverride }: Props) {
           {isAlert && (
             <div className="flex gap-1.5 pt-0.5">
               <button
-                disabled={overriding}
-                onClick={() => handleOverride("Confirmed")}
-                className="flex-1 text-xs py-1.5 rounded-md font-semibold bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                onClick={() => onSelectOrder?.(order)}
+                className="flex-1 text-[11px] py-1.5 rounded-md font-bold bg-teal-600 text-white hover:bg-teal-700 transition-colors shadow-sm"
               >
-                Approve
+                Review
               </button>
               <button
                 disabled={overriding}

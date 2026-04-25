@@ -2214,6 +2214,7 @@ export default function Dashboard() {
                   <KanbanBoard
                     orders={orders}
                     onRefresh={() => merchantId && fetchData(merchantId)}
+                    onSelectOrder={(order) => setSelectedOrderForReview(order)}
                   />
                 </div>
                 <div className="space-y-4">
