@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { supabase, BACKEND_URL } from "@/lib/supabase";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 
@@ -687,9 +687,19 @@ export default function GetStartedPage() {
       if (kbError) throw kbError;
 
       if (team.length > 0) {
-        await supabase.from("merchant_users").insert(team.map(m => ({ merchant_id: merchantId, invited_email: m.email, contact_number: m.phone, role: m.role, status: "invited" })));
+        // Use backend invite endpoint so Supabase auth email + WhatsApp are sent
+        const { data: { user } } = await supabase.auth.getUser();
+        const businessName = user?.user_metadata?.business_name || "SupplyLah";
+        await Promise.all(team.map(m =>
+          fetch(`${BACKEND_URL}/api/team/invite`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ merchant_id: merchantId, email: m.email, phone: m.phone, role: m.role, business_name: businessName }),
+          })
+        ));
       }
-      await supabase.auth.updateUser({ data: { onboarding_complete: true, merchant_id: merchantId } });
+      // Mark owner role in user metadata
+      await supabase.auth.updateUser({ data: { onboarding_complete: true, merchant_id: merchantId, role: "owner" } });
       router.push("/dashboard");
     } catch (err) {
       console.error("Setup error:", err);

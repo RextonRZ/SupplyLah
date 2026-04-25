@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 function SupplyLahLogo({ white = false }: { white?: boolean }) {
   return (
@@ -646,6 +647,17 @@ function Footer() {
 
 /* ── Page ─────────────────────────────────────────── */
 export default function LandingPage() {
+  const router = useRouter();
+
+  // Detect Supabase invite/magic-link tokens in URL hash and redirect to auth/callback
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = window.location.hash;
+    if (hash && (hash.includes("type=invite") || hash.includes("type=recovery") || hash.includes("access_token"))) {
+      router.replace("/auth/callback" + hash);
+    }
+  }, [router]);
+
   return (
     <div className="min-h-screen">
       <Navbar />
