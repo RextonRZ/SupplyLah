@@ -2,15 +2,31 @@
 
 > **From Chat. To Chain.**
 
+## 🎬 Video Pitch
+[![Watch the Pitch](https://img.shields.io/badge/Watch-Video%20Pitch-red?style=for-the-badge&logo=google-drive)](https://drive.google.com/file/d/1Io4of-N1gpotvdlsG-dt2R2u7Th_677c/view?usp=sharing)
+
+## 📄 Project Documents
+
+| Document | Link |
+|----------|------|
+| 📊 Pitching Deck | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Pitching%20Deck%20-%20SupplyLah.pdf) |
+| 📋 Product Requirement Documentation | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Product%20Requirement%20Documentation.pdf) |
+| ✅ Quality Assurance Testing Documentation | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Quality%20Assurance%20Testing%20Documentation.pdf) |
+| 🏗 System Analysis Documentation | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/System%20Analysis%20Documentation.pdf) |
+
+---
+
 SupplyLah is an AI-powered wholesale order automation platform built for Malaysian SME wholesalers. It transforms unstructured WhatsApp messages — text, voice notes, and images — into fully processed, logistics-ready orders with zero manual entry.
 
 ---
 
 ## Team Members
 
-1. Ooi Rui Zhe
-2. Vanness Liu Chuen Wei
-3. Ong Zhao Qia
+| Name | Role |
+|------|------|
+| Ooi Rui Zhe | Multi-Agent Orchestration, Frontend Dashboard, Mock Chat Demo |
+| Vanness Liu Chuen Wei | FastAPI Backend, Supabase Schema, Voice Transcription Pipeline |
+| Ong Zhao Qian | PRD, QA Testing, Prompt Engineering |
 
 ---
 
