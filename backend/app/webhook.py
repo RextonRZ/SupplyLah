@@ -20,6 +20,14 @@ from app.services.transcription_service import transcribe_audio_from_url
 
 from pathlib import Path
 
+from pydantic import BaseModel
+class ResolveOrderRequest(BaseModel):
+    order_id: str
+    amount: float
+    status: str
+    notes: str
+    merchant_id: str
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -299,4 +307,70 @@ async def _process_audio_message(
         logger.error(f"Error processing audio for {from_number}: {e}", exc_info=True)
         return None
     
+@router.post("/api/orders/resolve")
+async def resolve_order(payload: ResolveOrderRequest):
+    """
+    Called by the Admin Dashboard Modal to manually correct an order.
+    Clears the human_review flag and notifies the buyer.
+    """
+    from app.services import supabase_service, twilio_service
+    import json
     
+    # 1. Validation: Amount cannot be negative
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="Order amount cannot be negative")
+
+    # 2. Extract Language from the provided notes (the JSON metadata)
+    try:
+        metadata = json.loads(payload.notes)
+        # Try to find language in common paths we use
+        lang = metadata.get("language") or metadata.get("intake_result", {}).get("language_detected", "ms")
+    except Exception:
+        lang = "ms" # Fallback if JSON parsing fails here
+
+    # 3. Update the Order in DB
+    update_payload = {
+        "order_amount": payload.amount,
+        "order_status": payload.status,
+        "order_notes": payload.notes,
+        "requires_human_review": False,
+        "updated_at": "now()"
+    }
+    await supabase_service.update_order(payload.order_id, update_payload)
+    
+    order = await supabase_service.get_order_by_id(payload.order_id)
+    customer_phone = order['customer']['whatsapp_number']
+    
+    # 4. Dynamic WhatsApp Message based on detected language
+    if payload.status == "Awaiting Confirmation":
+        msg = (
+            "✅ Ejen kami telah mengemaskini pesanan anda. Sila semak semula dan balas *YA* untuk sahkan jumlah baru ini. 😊" if lang == "ms"
+            else "✅ Our agent has updated your order. Please review and reply *YES* to confirm this new total. 😊"
+        )
+    elif payload.status == "Confirmed":
+        msg = (
+            "✅ Pesanan anda telah disahkan secara manual. Kami akan atur penghantaran segera! 🚚" if lang == "ms"
+            else "✅ Your order has been manually confirmed. We are arranging delivery now! 🚚"
+        )
+    else:
+        msg = (
+            "Ejen kami telah mengemaskini maklumat pesanan anda. 🙏" if lang == "ms"
+            else "Our agent has updated your order details. 🙏"
+        )
+
+    await twilio_service.send_whatsapp_message(customer_phone, msg)
+    
+    log_entry = f"📝 [Manual Review] Resolved. Status: {payload.status}. New Amount: RM{payload.amount:.2f}"
+    if payload.amount < 50:
+        log_entry += " (⚠️ Threshold Bypassed by Human)"
+    
+    # Log with the corrected amount
+    await supabase_service.log_message(
+        customer_id=order['customer_id'],
+        order_id=payload.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=log_entry
+    )
+
+    return {"status": "success"}

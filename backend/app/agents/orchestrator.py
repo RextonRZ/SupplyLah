@@ -745,6 +745,20 @@ async def _handle_repeat_order_reply(
     has_vague_modifier = notes_data.get("has_vague_modifier", False)
     language = notes_data.get("language", "ms")
     lang = language or _detect_language(raw_text)
+    
+    if repeat_order.requires_human_review:
+        msg = (
+            "Sila tunggu sebentar, ejen manusia kami sedang menyemak pesanan anda dan akan membalas tidak lama lagi! 🙏" if lang == "ms"
+            else "Please wait a moment, our human agent is reviewing your order and will be with you shortly! 🙏"
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=repeat_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        return msg
 
     # If no vague modifier, treat as a YES/NO confirmation
     if not has_vague_modifier:
@@ -782,8 +796,9 @@ async def _handle_repeat_order_reply(
                 notes_data["escalated"] = True
                 await supabase_service.update_order_status(
                     repeat_order.order_id, 
-                    OrderStatus.EXPIRED, # Expire the AI flow to break the loop
-                    order_notes=_json.dumps(notes_data)
+                    repeat_order.order_status,        
+                    order_notes=_json.dumps(notes_data),
+                    requires_human_review=True  
                 )
                 msg = (
                     "Maaf, saya tak pasti kuantiti yang tepat. Saya akan minta ejen manusia untuk hubungi anda sebentar lagi ya! 🙏" if lang == "ms"
@@ -1434,9 +1449,32 @@ async def handle_incoming_message(
     repeat_order = await supabase_service.get_repeat_pending_order(customer.customer_id)
     sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
+    
+    # If any active order has the human review flag set, stop the AI here.
+    review_order = next((o for o in [address_order, restock_order, repeat_order, sub_order, pending_order] 
+                        if o and o.requires_human_review), None)
 
     # Resolve the message text early so we can inspect it for routing decisions
     raw_text = await _resolve_to_text(message_type, text_content, media_url)
+    
+    if review_order:
+        emit(f"📋 [State] Order {review_order.order_id[:8]} is flagged for review — blocking AI.")
+        lang = _detect_language(raw_text)
+        final = (
+            "Sila tunggu sebentar, ejen manusia kami sedang menyemak pesanan anda dan akan membalas tidak lama lagi! 🙏" if lang == "ms"
+            else "Please wait a moment, our human agent is reviewing your order and will be with you shortly! 🙏"
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=review_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=final,
+        )
+        # We return early here so the AI doesn't try to process the new message
+        collector = _msg_collector.get()
+        if collector is not None: collector.append(final)
+        return final
 
     # Auto-expire pending orders that are:
     # (a) older than 30 minutes, OR
@@ -1454,13 +1492,15 @@ async def handle_incoming_message(
     _is_confirm_reply = _is_confirmation(raw_text) is not None  # True/False = YES/NO, not None
 
     for _order, _label in [
-        (address_order, "address"), (restock_order, "restock"), (repeat_order, "repeat"),
+        (review_order, "review"), (address_order, "address"), (restock_order, "restock"), (repeat_order, "repeat"),
         (sub_order, "substitution"), (pending_order, "confirmation"),
     ]:
         if not _order:
             continue
         _expire = False
-        if _is_stale_dt(_order):
+        if _label == "review":
+            pass
+        elif _is_stale_dt(_order):
             emit(f"⏰ [State] Expiring stale {_label} order {_order.order_id[:8]} (>30 min old)")
             _expire = True
         elif _label in ("substitution", "confirmation") and not _is_confirm_reply:
@@ -1475,7 +1515,21 @@ async def handle_incoming_message(
             if _order is sub_order: sub_order = None
             if _order is pending_order: pending_order = None
 
-    if address_order:
+    if review_order:
+        emit(f"📋 [State] Order {review_order.order_id[:8]} is awaiting human review — locking chat.")
+        lang = _detect_language(raw_text)
+        final = (
+            "Sila tunggu sebentar, ejen manusia kami sedang menyemak pesanan anda dan akan membalas tidak lama lagi! 🙏" if lang == "ms"
+            else "Please wait a moment, our human agent is reviewing your order and will be with you shortly! 🙏"
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=review_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=final,
+        )
+    elif address_order:
         emit(f"📋 [State] Awaiting delivery address — order {address_order.order_id[:8]}...")
         final = await _handle_address_reply(raw_text, address_order, customer, merchant_id)
     elif restock_order:

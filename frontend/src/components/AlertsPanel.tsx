@@ -3,7 +3,7 @@
 import { Order } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
 
-export default function AlertsPanel({ orders }: { orders: Order[]; onRefresh: () => void }) {
+export default function AlertsPanel({ orders, onSelectOrder }: { orders: Order[]; onRefresh: () => void; onSelectOrder: (order: Order) => void }) {
   const alerts = orders.filter(
     o => o.requires_human_review && o.order_status !== "Confirmed" && o.order_status !== "Dispatched" && o.order_status !== "Expired"
   );
@@ -27,27 +27,57 @@ export default function AlertsPanel({ orders }: { orders: Order[]; onRefresh: ()
             <p className="text-sm text-slate-500">All orders processing normally</p>
           </div>
         ) : (
-          <div className="space-y-2 max-h-56 overflow-y-auto">
-            {alerts.map(order => (
-              <div key={order.order_id} className="rounded-lg border border-red-100 bg-red-50 p-3">
-                <div className="flex justify-between items-start mb-1">
-                  <p className="text-sm font-semibold text-slate-800 truncate">{order.customer?.customer_name || "Unknown"}</p>
-                  <span className="text-xs font-bold text-red-500 shrink-0 ml-2 tabular-nums">
-                    {((order.confidence_score || 0) * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mb-2">
-                  {(() => {
-                    try { const n = JSON.parse(order.order_notes || "{}"); return n.intake_result?.notes || "Requires manual review"; }
-                    catch { return "Requires manual review"; }
-                  })()}
-                </p>
-                <div className="flex justify-between text-xs text-slate-400">
-                  <span className="font-mono">#{order.order_id.split("-")[0]}</span>
-                  <span>{formatDistanceToNow(new Date(order.created_at), { addSuffix: true })}</span>
-                </div>
-              </div>
-            ))}
+          <div className="space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
+            {alerts.map(order => {
+              // Determine the reason for the alert by checking notes
+              let alertReason = "Requires manual review";
+              try {
+                const notes = JSON.parse(order.order_notes || "{}");
+                if (notes.clarification_count >= 3) {
+                  alertReason = "🚨 Chat Escalated: 3+ ambiguous replies.";
+                } else {
+                  alertReason = notes.intake_result?.notes || "Requires review (Low AI Confidence)";
+                }
+              } catch (e) {
+                alertReason = "Requires manual review";
+              }
+
+              return (
+                <button
+                  key={order.order_id}
+                  onClick={() => onSelectOrder(order)}
+                  className="w-full text-left group relative rounded-lg border border-red-100 bg-white p-3 cursor-pointer hover:bg-red-50 hover:border-red-200 transition-all duration-200 active:scale-[0.98]"
+                >
+                  <div className="flex justify-between items-start mb-1">
+                    <p className="text-sm font-bold text-slate-900 truncate pr-4">
+                      {order.customer?.customer_name || "New Customer"}
+                    </p>
+                    <span className="text-[10px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100 tabular-nums">
+                      {order.confidence_score ? `${(order.confidence_score * 100).toFixed(0)}%` : "—"}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-red-600 font-medium mb-3 line-clamp-2 leading-relaxed">
+                    {alertReason}
+                  </p>
+
+                  <div className="flex justify-between items-center text-[10px]">
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <span className="font-mono font-bold bg-slate-100 px-1 rounded">
+                        #{order.order_id.split("-")[0]}
+                      </span>
+                      <span>•</span>
+                      <span>{formatDistanceToNow(new Date(order.created_at), { addSuffix: true })}</span>
+                    </div>
+                    
+                    {/* View/Resolve Indicator */}
+                    <span className="text-slate-400 group-hover:text-red-500 font-bold transition-colors">
+                      Review →
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

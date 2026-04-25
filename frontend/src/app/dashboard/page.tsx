@@ -9,6 +9,7 @@ import KanbanBoard from "@/components/KanbanBoard";
 import AlertsPanel from "@/components/AlertsPanel";
 import InventoryPanel from "@/components/InventoryPanel";
 import MockChat from "@/components/MockChat";
+import OrderReviewModal from "@/components/OrderReviewModal";
 
 const DEMO_MERCHANT_ID =
   process.env.NEXT_PUBLIC_MERCHANT_ID || "00000000-0000-0000-0000-000000000001";
@@ -470,108 +471,208 @@ function SectionHeader({ title, sub }: { title: string; sub?: string }) {
   );
 }
 
-function StatRow({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatRow({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
   return (
     <div className="flex items-center justify-between py-2.5 border-b border-slate-100 last:border-0">
       <span className="text-sm text-slate-500">{label}</span>
-      <span className={`text-sm font-semibold tabular-nums ${accent ? "text-teal-700" : "text-slate-800"}`}>{value}</span>
+      <span
+        className={`text-sm font-semibold tabular-nums ${accent ? "text-teal-700" : "text-slate-800"}`}
+      >
+        {value}
+      </span>
     </div>
   );
 }
 
-function BarRow({ label, value, max, pct, color = "bg-teal-500" }: { label: string; value: string; max?: number; pct: number; color?: string }) {
+function BarRow({
+  label,
+  value,
+  max,
+  pct,
+  color = "bg-teal-500",
+}: {
+  label: string;
+  value: string;
+  max?: number;
+  pct: number;
+  color?: string;
+}) {
   return (
     <div className="py-2 border-b border-slate-50 last:border-0">
       <div className="flex justify-between items-baseline mb-1.5">
-        <span className="text-sm text-slate-700 truncate max-w-[200px]">{label}</span>
-        <span className="text-xs text-slate-500 font-mono ml-3 shrink-0">{value}</span>
+        <span className="text-sm text-slate-700 truncate max-w-[200px]">
+          {label}
+        </span>
+        <span className="text-xs text-slate-500 font-mono ml-3 shrink-0">
+          {value}
+        </span>
       </div>
       <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%`, transition: "width 0.6s ease" }} />
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${pct}%`, transition: "width 0.6s ease" }}
+        />
       </div>
     </div>
   );
 }
 
-function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory: Product[] }) {
-  const now           = new Date();
-  const todayStr      = now.toISOString().slice(0, 10);
-  const weekAgo       = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-  const sevenDaysAgo  = new Date(now.getTime() - 7 * 86400000);
+function AnalyticsDashboard({
+  orders,
+  inventory,
+}: {
+  orders: Order[];
+  inventory: Product[];
+}) {
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const weekAgo = new Date(now.getTime() - 7 * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
 
-  const confirmedOrders = orders.filter(o => o.order_status === "Confirmed" || o.order_status === "Dispatched");
+  const confirmedOrders = orders.filter(
+    (o) => o.order_status === "Confirmed" || o.order_status === "Dispatched",
+  );
 
   // ── Module 1: Revenue & Sales Velocity ──
-  const totalRevenue  = confirmedOrders.reduce((s, o) => s + (o.order_amount || 0), 0);
-  const revenueToday  = confirmedOrders.filter(o => (o.created_at || "").startsWith(todayStr)).reduce((s, o) => s + (o.order_amount || 0), 0);
-  const revenueWeek   = confirmedOrders.filter(o => (o.created_at || "") >= weekAgo).reduce((s, o) => s + (o.order_amount || 0), 0);
-  const avgOrderValue = confirmedOrders.length ? totalRevenue / confirmedOrders.length : 0;
+  const totalRevenue = confirmedOrders.reduce(
+    (s, o) => s + (o.order_amount || 0),
+    0,
+  );
+  const revenueToday = confirmedOrders
+    .filter((o) => (o.created_at || "").startsWith(todayStr))
+    .reduce((s, o) => s + (o.order_amount || 0), 0);
+  const revenueWeek = confirmedOrders
+    .filter((o) => (o.created_at || "") >= weekAgo)
+    .reduce((s, o) => s + (o.order_amount || 0), 0);
+  const avgOrderValue = confirmedOrders.length
+    ? totalRevenue / confirmedOrders.length
+    : 0;
 
   // Daily revenue last 7 days
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(now.getTime() - (6 - i) * 86400000);
     return d.toISOString().slice(0, 10);
   });
-  const dailyRevenue = days.map(day => ({
+  const dailyRevenue = days.map((day) => ({
     label: new Date(day).toLocaleDateString("en-MY", { weekday: "short" }),
-    value: confirmedOrders.filter(o => (o.created_at || "").startsWith(day)).reduce((s, o) => s + (o.order_amount || 0), 0),
+    value: confirmedOrders
+      .filter((o) => (o.created_at || "").startsWith(day))
+      .reduce((s, o) => s + (o.order_amount || 0), 0),
   }));
-  const maxDayRevenue = Math.max(...dailyRevenue.map(d => d.value), 1);
+  const maxDayRevenue = Math.max(...dailyRevenue.map((d) => d.value), 1);
 
   // ── Module 2: AI Performance & Automation ──
-  const totalOrders       = orders.length;
-  const automatedOrders   = orders.filter(o => !o.requires_human_review).length;
-  const automationRate    = totalOrders > 0 ? (automatedOrders / totalOrders) * 100 : 0;
-  const avgConfidence     = orders.filter(o => o.confidence_score != null).reduce((s, o, _, a) => s + (o.confidence_score || 0) / a.length, 0) * 100;
+  const totalOrders = orders.length;
+  const automatedOrders = orders.filter((o) => !o.requires_human_review).length;
+  const automationRate =
+    totalOrders > 0 ? (automatedOrders / totalOrders) * 100 : 0;
+  const avgConfidence =
+    orders
+      .filter((o) => o.confidence_score != null)
+      .reduce((s, o, _, a) => s + (o.confidence_score || 0) / a.length, 0) *
+    100;
   const languageMap: Record<string, number> = {};
   for (const o of orders) {
     try {
       const notes = JSON.parse(o.order_notes || "{}");
-      const lang = notes.language || notes.intake_result?.language_detected || "unknown";
+      const lang =
+        notes.language || notes.intake_result?.language_detected || "unknown";
       languageMap[lang] = (languageMap[lang] || 0) + 1;
     } catch {}
   }
-  const langEntries = Object.entries(languageMap).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  const langTotal   = langEntries.reduce((s, [, v]) => s + v, 0) || 1;
+  const langEntries = Object.entries(languageMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+  const langTotal = langEntries.reduce((s, [, v]) => s + v, 0) || 1;
 
   // ── Module 3: Substitution Intelligence ──
-  const ordersWithSub      = orders.filter(o => o.order_item?.some(i => i.is_substituted));
-  const substitutedItems   = orders.flatMap(o => (o.order_item || []).filter(i => i.is_substituted));
-  const subAcceptedOrders  = confirmedOrders.filter(o => o.order_item?.some(i => i.is_substituted));
-  const subRate            = ordersWithSub.length > 0 ? (subAcceptedOrders.length / ordersWithSub.length) * 100 : 0;
+  const ordersWithSub = orders.filter((o) =>
+    o.order_item?.some((i) => i.is_substituted),
+  );
+  const substitutedItems = orders.flatMap((o) =>
+    (o.order_item || []).filter((i) => i.is_substituted),
+  );
+  const subAcceptedOrders = confirmedOrders.filter((o) =>
+    o.order_item?.some((i) => i.is_substituted),
+  );
+  const subRate =
+    ordersWithSub.length > 0
+      ? (subAcceptedOrders.length / ordersWithSub.length) * 100
+      : 0;
   const subProductMap: Record<string, number> = {};
   for (const item of substitutedItems) {
-    subProductMap[item.product_name] = (subProductMap[item.product_name] || 0) + 1;
+    subProductMap[item.product_name] =
+      (subProductMap[item.product_name] || 0) + 1;
   }
-  const topSubProducts = Object.entries(subProductMap).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  const maxSubCount    = topSubProducts[0]?.[1] || 1;
-  const revenueSaved   = subAcceptedOrders.reduce((s, o) => s + (o.order_amount || 0), 0);
+  const topSubProducts = Object.entries(subProductMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+  const maxSubCount = topSubProducts[0]?.[1] || 1;
+  const revenueSaved = subAcceptedOrders.reduce(
+    (s, o) => s + (o.order_amount || 0),
+    0,
+  );
 
   // ── Module 4: Top Products & Sales SKU ──
   const productMap: Record<string, { qty: number; orders: number }> = {};
   for (const o of orders) {
-    for (const item of (o.order_item || [])) {
-      if (!productMap[item.product_name]) productMap[item.product_name] = { qty: 0, orders: 0 };
-      productMap[item.product_name].qty    += item.quantity || 0;
+    for (const item of o.order_item || []) {
+      if (!productMap[item.product_name])
+        productMap[item.product_name] = { qty: 0, orders: 0 };
+      productMap[item.product_name].qty += item.quantity || 0;
       productMap[item.product_name].orders += 1;
     }
   }
-  const topProducts = Object.entries(productMap).sort((a, b) => b[1].qty - a[1].qty).slice(0, 6);
+  const topProducts = Object.entries(productMap)
+    .sort((a, b) => b[1].qty - a[1].qty)
+    .slice(0, 6);
   const maxProductQty = topProducts[0]?.[1].qty || 1;
 
   // ── Module 5: Customer Loyalty & Activity ──
-  const buyerMap: Record<string, { name: string; phone: string; count: number; spent: number; lastOrder: string }> = {};
+  const buyerMap: Record<
+    string,
+    {
+      name: string;
+      phone: string;
+      count: number;
+      spent: number;
+      lastOrder: string;
+    }
+  > = {};
   for (const o of orders) {
     const id = o.customer_id;
-    if (!buyerMap[id]) buyerMap[id] = { name: o.customer?.customer_name || "Unknown", phone: o.customer?.whatsapp_number || "", count: 0, spent: 0, lastOrder: o.created_at || "" };
+    if (!buyerMap[id])
+      buyerMap[id] = {
+        name: o.customer?.customer_name || "Unknown",
+        phone: o.customer?.whatsapp_number || "",
+        count: 0,
+        spent: 0,
+        lastOrder: o.created_at || "",
+      };
     buyerMap[id].count++;
-    buyerMap[id].spent    += o.order_amount || 0;
-    if ((o.created_at || "") > buyerMap[id].lastOrder) buyerMap[id].lastOrder = o.created_at || "";
+    buyerMap[id].spent += o.order_amount || 0;
+    if ((o.created_at || "") > buyerMap[id].lastOrder)
+      buyerMap[id].lastOrder = o.created_at || "";
   }
-  const allBuyers   = Object.values(buyerMap);
-  const topBuyers   = allBuyers.sort((a, b) => b.count - a.count).slice(0, 5);
-  const dormant     = allBuyers.filter(b => b.lastOrder && new Date(b.lastOrder) < sevenDaysAgo);
-  const repeatRate  = allBuyers.length > 0 ? (allBuyers.filter(b => b.count > 1).length / allBuyers.length) * 100 : 0;
+  const allBuyers = Object.values(buyerMap);
+  const topBuyers = allBuyers.sort((a, b) => b.count - a.count).slice(0, 5);
+  const dormant = allBuyers.filter(
+    (b) => b.lastOrder && new Date(b.lastOrder) < sevenDaysAgo,
+  );
+  const repeatRate =
+    allBuyers.length > 0
+      ? (allBuyers.filter((b) => b.count > 1).length / allBuyers.length) * 100
+      : 0;
 
   const CARD = "bg-white rounded-xl border border-slate-200 overflow-hidden";
   const HEAD = "px-5 pt-5 pb-0";
@@ -580,34 +681,64 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
     <div className="space-y-4 pb-6">
       {/* Section divider */}
       <div className="flex items-center gap-3 pt-2">
-        <span className="text-xs font-semibold text-slate-500">Trends &amp; Analytics</span>
+        <span className="text-xs font-semibold text-slate-500">
+          Trends &amp; Analytics
+        </span>
         <div className="h-px flex-1 bg-slate-200" />
       </div>
 
       {/* Row 1: Revenue + AI Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
         {/* Revenue & Sales Velocity */}
         <div className={CARD}>
           <div className={HEAD}>
-            <SectionHeader title="Revenue & Sales Velocity" sub="Confirmed and dispatched orders only" />
+            <SectionHeader
+              title="Revenue & Sales Velocity"
+              sub="Confirmed and dispatched orders only"
+            />
           </div>
           <div className="px-5 pb-2">
             <div className="flex items-baseline gap-3 mb-4">
-              <span className="text-3xl font-semibold text-slate-900 tabular-nums">RM {totalRevenue.toFixed(2)}</span>
+              <span className="text-3xl font-semibold text-slate-900 tabular-nums">
+                RM {totalRevenue.toFixed(2)}
+              </span>
               <span className="text-sm text-slate-400">all-time</span>
             </div>
             <div className="mb-4">
-              <StatRow label="Today"     value={`RM ${revenueToday.toFixed(2)}`} />
-              <StatRow label="This week" value={`RM ${revenueWeek.toFixed(2)}`} />
-              <StatRow label="Avg order value" value={`RM ${avgOrderValue.toFixed(2)}`} accent />
+              <StatRow label="Today" value={`RM ${revenueToday.toFixed(2)}`} />
+              <StatRow
+                label="This week"
+                value={`RM ${revenueWeek.toFixed(2)}`}
+              />
+              <StatRow
+                label="Avg order value"
+                value={`RM ${avgOrderValue.toFixed(2)}`}
+                accent
+              />
             </div>
             {/* 7-day bar chart */}
-            <p className="text-xs text-slate-400 mb-2">Daily revenue — last 7 days</p>
+            <p className="text-xs text-slate-400 mb-2">
+              Daily revenue — last 7 days
+            </p>
             <div className="flex items-end gap-1 h-16">
               {dailyRevenue.map((d, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <div className="w-full rounded-t relative" style={{ height: `${Math.max((d.value / maxDayRevenue) * 52, d.value > 0 ? 4 : 0)}px`, background: d.label === new Date().toLocaleDateString("en-MY", { weekday: "short" }) ? "linear-gradient(180deg,#0d8080,#14bcbc)" : "#e2e8f0" }} />
+                <div
+                  key={i}
+                  className="flex-1 flex flex-col items-center gap-1"
+                >
+                  <div
+                    className="w-full rounded-t relative"
+                    style={{
+                      height: `${Math.max((d.value / maxDayRevenue) * 52, d.value > 0 ? 4 : 0)}px`,
+                      background:
+                        d.label ===
+                        new Date().toLocaleDateString("en-MY", {
+                          weekday: "short",
+                        })
+                          ? "linear-gradient(180deg,#0d8080,#14bcbc)"
+                          : "#e2e8f0",
+                    }}
+                  />
                   <span className="text-[10px] text-slate-400">{d.label}</span>
                 </div>
               ))}
@@ -618,23 +749,49 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
         {/* AI Performance & Automation */}
         <div className={CARD}>
           <div className={HEAD}>
-            <SectionHeader title="AI Performance & Automation" sub="Quality of AI order processing" />
+            <SectionHeader
+              title="AI Performance & Automation"
+              sub="Quality of AI order processing"
+            />
           </div>
           <div className="px-5 pb-5">
             <div className="grid grid-cols-2 gap-3 mb-4">
               {[
-                { label: "Automation Rate",    value: `${automationRate.toFixed(0)}%`,   color: "text-teal-700" },
-                { label: "Avg AI Confidence",  value: `${avgConfidence.toFixed(0)}%`,    color: "text-slate-800" },
-                { label: "Auto-processed",     value: `${automatedOrders}`,              color: "text-slate-800" },
-                { label: "Flagged for Review", value: `${totalOrders - automatedOrders}`, color: totalOrders - automatedOrders > 0 ? "text-red-600" : "text-slate-400" },
+                {
+                  label: "Automation Rate",
+                  value: `${automationRate.toFixed(0)}%`,
+                  color: "text-teal-700",
+                },
+                {
+                  label: "Avg AI Confidence",
+                  value: `${avgConfidence.toFixed(0)}%`,
+                  color: "text-slate-800",
+                },
+                {
+                  label: "Auto-processed",
+                  value: `${automatedOrders}`,
+                  color: "text-slate-800",
+                },
+                {
+                  label: "Flagged for Review",
+                  value: `${totalOrders - automatedOrders}`,
+                  color:
+                    totalOrders - automatedOrders > 0
+                      ? "text-red-600"
+                      : "text-slate-400",
+                },
               ].map(({ label, value, color }) => (
                 <div key={label} className="bg-slate-50 rounded-lg p-3">
                   <p className="text-xs text-slate-500 mb-1">{label}</p>
-                  <p className={`text-xl font-semibold tabular-nums ${color}`}>{value}</p>
+                  <p className={`text-xl font-semibold tabular-nums ${color}`}>
+                    {value}
+                  </p>
                 </div>
               ))}
             </div>
-            <p className="text-xs text-slate-400 mb-2">Order language distribution</p>
+            <p className="text-xs text-slate-400 mb-2">
+              Order language distribution
+            </p>
             {langEntries.length === 0 ? (
               <p className="text-sm text-slate-400">No data yet</p>
             ) : (
@@ -642,7 +799,15 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
                 {langEntries.map(([lang, count]) => (
                   <BarRow
                     key={lang}
-                    label={lang === "ms" ? "Bahasa Melayu" : lang === "en" ? "English" : lang === "mixed" ? "Bahasa Rojak" : lang}
+                    label={
+                      lang === "ms"
+                        ? "Bahasa Melayu"
+                        : lang === "en"
+                          ? "English"
+                          : lang === "mixed"
+                            ? "Bahasa Rojak"
+                            : lang
+                    }
                     value={`${count} orders`}
                     pct={Math.round((count / langTotal) * 100)}
                   />
@@ -655,29 +820,45 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
 
       {/* Row 2: Substitution + Top Products + Customer Loyalty */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
         {/* Substitution Intelligence */}
         <div className={CARD}>
           <div className={HEAD}>
-            <SectionHeader title="Substitution Intelligence" sub="AI-driven stock-out recovery" />
+            <SectionHeader
+              title="Substitution Intelligence"
+              sub="AI-driven stock-out recovery"
+            />
           </div>
           <div className="px-5 pb-5">
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="text-xs text-slate-500 mb-1">Acceptance Rate</p>
-                <p className="text-xl font-semibold text-teal-700 tabular-nums">{ordersWithSub.length > 0 ? `${subRate.toFixed(0)}%` : "—"}</p>
+                <p className="text-xl font-semibold text-teal-700 tabular-nums">
+                  {ordersWithSub.length > 0 ? `${subRate.toFixed(0)}%` : "—"}
+                </p>
               </div>
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="text-xs text-slate-500 mb-1">Revenue Saved</p>
-                <p className="text-xl font-semibold text-slate-800 tabular-nums">RM {revenueSaved.toFixed(0)}</p>
+                <p className="text-xl font-semibold text-slate-800 tabular-nums">
+                  RM {revenueSaved.toFixed(0)}
+                </p>
               </div>
             </div>
-            <p className="text-xs text-slate-400 mb-2">Most substituted products</p>
+            <p className="text-xs text-slate-400 mb-2">
+              Most substituted products
+            </p>
             {topSubProducts.length === 0 ? (
-              <p className="text-sm text-slate-400 py-3 text-center">No substitutions recorded</p>
+              <p className="text-sm text-slate-400 py-3 text-center">
+                No substitutions recorded
+              </p>
             ) : (
               topSubProducts.map(([name, count]) => (
-                <BarRow key={name} label={name} value={`${count}×`} pct={Math.round((count / maxSubCount) * 100)} color="bg-orange-400" />
+                <BarRow
+                  key={name}
+                  label={name}
+                  value={`${count}×`}
+                  pct={Math.round((count / maxSubCount) * 100)}
+                  color="bg-orange-400"
+                />
               ))
             )}
           </div>
@@ -686,14 +867,24 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
         {/* Top Products by Volume */}
         <div className={CARD}>
           <div className={HEAD}>
-            <SectionHeader title="Top Products by Volume" sub="Units ordered across all orders" />
+            <SectionHeader
+              title="Top Products by Volume"
+              sub="Units ordered across all orders"
+            />
           </div>
           <div className="px-5 pb-5">
             {topProducts.length === 0 ? (
-              <p className="text-sm text-slate-400 py-8 text-center">No order items yet</p>
+              <p className="text-sm text-slate-400 py-8 text-center">
+                No order items yet
+              </p>
             ) : (
               topProducts.map(([name, { qty }]) => (
-                <BarRow key={name} label={name} value={`${qty} units`} pct={Math.round((qty / maxProductQty) * 100)} />
+                <BarRow
+                  key={name}
+                  label={name}
+                  value={`${qty} units`}
+                  pct={Math.round((qty / maxProductQty) * 100)}
+                />
               ))
             )}
           </div>
@@ -702,34 +893,62 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
         {/* Customer Loyalty */}
         <div className={CARD}>
           <div className={HEAD}>
-            <SectionHeader title="Customer Activity" sub="Loyalty and engagement signals" />
+            <SectionHeader
+              title="Customer Activity"
+              sub="Loyalty and engagement signals"
+            />
           </div>
           <div className="px-5 pb-5">
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="text-xs text-slate-500 mb-1">Repeat Rate</p>
-                <p className="text-xl font-semibold text-teal-700 tabular-nums">{repeatRate.toFixed(0)}%</p>
+                <p className="text-xl font-semibold text-teal-700 tabular-nums">
+                  {repeatRate.toFixed(0)}%
+                </p>
               </div>
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="text-xs text-slate-500 mb-1">Dormant (7d)</p>
-                <p className={`text-xl font-semibold tabular-nums ${dormant.length > 0 ? "text-amber-600" : "text-slate-400"}`}>{dormant.length}</p>
+                <p
+                  className={`text-xl font-semibold tabular-nums ${dormant.length > 0 ? "text-amber-600" : "text-slate-400"}`}
+                >
+                  {dormant.length}
+                </p>
               </div>
             </div>
-            <p className="text-xs text-slate-400 mb-2">Top buyers by order count</p>
+            <p className="text-xs text-slate-400 mb-2">
+              Top buyers by order count
+            </p>
             {topBuyers.length === 0 ? (
-              <p className="text-sm text-slate-400 py-3 text-center">No orders yet</p>
+              <p className="text-sm text-slate-400 py-3 text-center">
+                No orders yet
+              </p>
             ) : (
               <div className="space-y-0">
                 {topBuyers.map((b, i) => (
-                  <div key={i} className="flex items-center gap-3 py-2.5 border-b border-slate-50 last:border-0">
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${i === 0 ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"}`}>{i + 1}</span>
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 py-2.5 border-b border-slate-50 last:border-0"
+                  >
+                    <span
+                      className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${i === 0 ? "bg-teal-600 text-white" : "bg-slate-100 text-slate-500"}`}
+                    >
+                      {i + 1}
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800 truncate leading-tight">{b.name}</p>
-                      <p className="text-xs text-slate-400 font-mono">{b.phone}</p>
+                      <p className="text-sm font-medium text-slate-800 truncate leading-tight">
+                        {b.name}
+                      </p>
+                      <p className="text-xs text-slate-400 font-mono">
+                        {b.phone}
+                      </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-sm font-semibold text-slate-700 tabular-nums">{b.count}×</p>
-                      <p className="text-xs text-teal-600 tabular-nums">RM {b.spent.toFixed(0)}</p>
+                      <p className="text-sm font-semibold text-slate-700 tabular-nums">
+                        {b.count}×
+                      </p>
+                      <p className="text-xs text-teal-600 tabular-nums">
+                        RM {b.spent.toFixed(0)}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -883,7 +1102,9 @@ function RulesAdminTab({
       rules.chargeDelivery
         ? `Charge delivery fee. Flat rate: RM${rules.deliveryFee || "0 (use live Lalamove price)"}.`
         : "Delivery fee absorbed by merchant.",
-      ...(rules.customRules?.trim() ? [`Additional rules:\n${rules.customRules.trim()}`] : []),
+      ...(rules.customRules?.trim()
+        ? [`Additional rules:\n${rules.customRules.trim()}`]
+        : []),
     ].join("\n\n");
 
     const { error: kbTextError } = await supabase.from("knowledge_base").upsert(
@@ -1091,7 +1312,8 @@ function RulesAdminTab({
             Additional business rules
           </p>
           <p className="text-xs text-slate-500 mb-3">
-            Write any extra pricing or discount rules in plain text — the AI will follow these when generating quotes.
+            Write any extra pricing or discount rules in plain text — the AI
+            will follow these when generating quotes.
           </p>
           <textarea
             rows={5}
@@ -1468,7 +1690,10 @@ function DashboardSkeleton() {
       {/* KPI strip — 4 cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+          <div
+            key={i}
+            className="bg-white rounded-xl border border-slate-200 p-5 space-y-3"
+          >
             <Sk className="h-3 w-24 rounded-md" />
             <Sk className="h-8 w-16 rounded-lg" />
             <Sk className="h-2.5 w-32 rounded-md" />
@@ -1495,13 +1720,18 @@ function DashboardSkeleton() {
                   </div>
                   <Sk className="h-3 w-4 rounded-md" />
                 </div>
-                {Array.from({ length: col === 0 ? 3 : col === 2 ? 2 : 1 }).map((_, i) => (
-                  <div key={i} className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1.5">
-                    <Sk className="h-3 w-full rounded-md" />
-                    <Sk className="h-2.5 w-3/4 rounded-md" />
-                    <Sk className="h-2 w-1/2 rounded-md" />
-                  </div>
-                ))}
+                {Array.from({ length: col === 0 ? 3 : col === 2 ? 2 : 1 }).map(
+                  (_, i) => (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1.5"
+                    >
+                      <Sk className="h-3 w-full rounded-md" />
+                      <Sk className="h-2.5 w-3/4 rounded-md" />
+                      <Sk className="h-2 w-1/2 rounded-md" />
+                    </div>
+                  ),
+                )}
               </div>
             ))}
           </div>
@@ -1515,7 +1745,10 @@ function DashboardSkeleton() {
             </div>
             <div className="p-3 space-y-2">
               {Array.from({ length: 2 }).map((_, i) => (
-                <div key={i} className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-1.5">
+                <div
+                  key={i}
+                  className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-1.5"
+                >
                   <Sk className="h-3 w-full rounded-md" />
                   <Sk className="h-2.5 w-2/3 rounded-md" />
                   <Sk className="h-2 w-1/2 rounded-md" />
@@ -1559,7 +1792,11 @@ function DashboardSkeleton() {
           {/* Bar chart */}
           <div className="flex items-end gap-1 h-16 pt-2">
             {Array.from({ length: 7 }).map((_, i) => (
-              <Sk key={i} className="flex-1 rounded-t-sm" style={{ height: `${30 + Math.random() * 60}%` }} />
+              <Sk
+                key={i}
+                className="flex-1 rounded-t-sm"
+                style={{ height: `${30 + Math.random() * 60}%` }}
+              />
             ))}
           </div>
         </div>
@@ -1630,11 +1867,13 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
   const [aiLogs, setAiLogs] = useState<{ t: string; m: string }[]>([]);
   const [demoPhone, setDemoPhone] = useState("+60198765432");
-  const [demoName,  setDemoName]  = useState("Demo Customer");
+  const [demoName, setDemoName] = useState("Demo Customer");
   const [demoEditOpen, setDemoEditOpen] = useState(false);
   const [draftDemoPhone, setDraftDemoPhone] = useState("+60198765432");
-  const [draftDemoName,  setDraftDemoName]  = useState("Demo Customer");
+  const [draftDemoName, setDraftDemoName] = useState("Demo Customer");
   const [demoChatKey, setDemoChatKey] = useState(0); // increment to force MockChat remount
+  const [selectedOrderForReview, setSelectedOrderForReview] =
+    useState<Order | null>(null);
 
   /* Resolve auth + merchant, THEN set merchantId to trigger fetch */
   useEffect(() => {
@@ -1902,15 +2141,47 @@ export default function Dashboard() {
               {stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {[
-                    { label: "Orders Today",    value: stats.total_today,                          sub: `${stats.pending} pending · ${stats.awaiting_substitution} substitution`,  valueColor: "text-slate-900" },
-                    { label: "Awaiting Reply",  value: stats.awaiting_confirmation,                sub: "customers yet to confirm",                                                valueColor: "text-blue-600"  },
-                    { label: "Fulfilled",       value: stats.confirmed + stats.dispatched,         sub: `${stats.confirmed} confirmed · ${stats.dispatched} dispatched`,            valueColor: "text-teal-700"  },
-                    { label: "Needs Review",    value: stats.requires_review,                      sub: "low-confidence orders",                                                   valueColor: stats.requires_review > 0 ? "text-red-600" : "text-slate-300" },
+                    {
+                      label: "Orders Today",
+                      value: stats.total_today,
+                      sub: `${stats.pending} pending · ${stats.awaiting_substitution} substitution`,
+                      valueColor: "text-slate-900",
+                    },
+                    {
+                      label: "Awaiting Reply",
+                      value: stats.awaiting_confirmation,
+                      sub: "customers yet to confirm",
+                      valueColor: "text-blue-600",
+                    },
+                    {
+                      label: "Fulfilled",
+                      value: stats.confirmed + stats.dispatched,
+                      sub: `${stats.confirmed} confirmed · ${stats.dispatched} dispatched`,
+                      valueColor: "text-teal-700",
+                    },
+                    {
+                      label: "Needs Review",
+                      value: alertCount,
+                      sub: "requires manual intervention",
+                      valueColor:
+                        alertCount > 0 ? "text-red-600" : "text-slate-300",
+                    },
                   ].map(({ label, value, sub, valueColor }) => (
-                    <div key={label} className={`bg-white rounded-xl border p-5 ${label === "Needs Review" && stats.requires_review > 0 ? "border-red-200" : "border-slate-200"}`}>
-                      <p className="text-xs font-medium text-slate-500 mb-3">{label}</p>
-                      <p className={`text-3xl font-semibold leading-none mb-2 tabular-nums ${valueColor}`}>{value}</p>
-                      <p className="text-xs text-slate-400 leading-relaxed">{sub}</p>
+                    <div
+                      key={label}
+                      className={`bg-white rounded-xl border p-5 ${label === "Needs Review" && alertCount > 0 ? "border-red-200" : "border-slate-200"}`}
+                    >
+                      <p className="text-xs font-medium text-slate-500 mb-3">
+                        {label}
+                      </p>
+                      <p
+                        className={`text-3xl font-semibold leading-none mb-2 tabular-nums ${valueColor}`}
+                      >
+                        {value}
+                      </p>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        {sub}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -1919,10 +2190,17 @@ export default function Dashboard() {
               {/* ── Pipeline + Side ── */}
               <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
                 <div className="lg:col-span-3">
-                  <KanbanBoard orders={orders} onRefresh={() => merchantId && fetchData(merchantId)} />
+                  <KanbanBoard
+                    orders={orders}
+                    onRefresh={() => merchantId && fetchData(merchantId)}
+                  />
                 </div>
                 <div className="space-y-4">
-                  <AlertsPanel orders={orders} onRefresh={() => merchantId && fetchData(merchantId)} />
+                  <AlertsPanel
+                    orders={orders}
+                    onRefresh={() => merchantId && fetchData(merchantId)}
+                    onSelectOrder={(o) => setSelectedOrderForReview(o)}
+                  />
                   <InventoryPanel inventory={inventory} />
                 </div>
               </div>
@@ -1955,11 +2233,12 @@ export default function Dashboard() {
 
           {activeTab === "demo" && (
             <div className="max-w-7xl mx-auto flex flex-row gap-6 items-start h-[calc(100vh-180px)]">
-
               {/* FAR LEFT: Customer identity card */}
               <div className="w-52 shrink-0 flex flex-col gap-3 mr-2">
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Mock Customer</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+                    Mock Customer
+                  </p>
 
                   {demoEditOpen ? (
                     <div className="space-y-2">
@@ -1986,9 +2265,12 @@ export default function Dashboard() {
                       <div className="flex gap-2 pt-1">
                         <button
                           onClick={() => {
-                            const phone = draftDemoPhone.trim() || "+60198765432";
-                            const name  = draftDemoName.trim()  || "Demo Customer";
-                            if (phone !== demoPhone) setDemoChatKey(k => k + 1);
+                            const phone =
+                              draftDemoPhone.trim() || "+60198765432";
+                            const name =
+                              draftDemoName.trim() || "Demo Customer";
+                            if (phone !== demoPhone)
+                              setDemoChatKey((k) => k + 1);
                             setDemoPhone(phone);
                             setDemoName(name);
                             setDemoEditOpen(false);
@@ -2012,22 +2294,32 @@ export default function Dashboard() {
                           {demoName.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-slate-800 leading-tight">{demoName}</p>
-                          <p className="text-[11px] text-slate-400 font-mono mt-0.5">{demoPhone}</p>
+                          <p className="text-sm font-bold text-slate-800 leading-tight">
+                            {demoName}
+                          </p>
+                          <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                            {demoPhone}
+                          </p>
                         </div>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${demoPhone === "+60198765432" ? "bg-slate-100 text-slate-500" : "bg-teal-50 text-teal-600"}`}>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${demoPhone === "+60198765432" ? "bg-slate-100 text-slate-500" : "bg-teal-50 text-teal-600"}`}
+                        >
                           {demoPhone === "+60198765432" ? "default" : "custom"}
                         </span>
                       </div>
                       <div className="space-y-2">
                         <button
-                          onClick={() => { setDraftDemoName(demoName); setDraftDemoPhone(demoPhone); setDemoEditOpen(true); }}
+                          onClick={() => {
+                            setDraftDemoName(demoName);
+                            setDraftDemoPhone(demoPhone);
+                            setDemoEditOpen(true);
+                          }}
                           className="w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
                         >
                           Edit customer
                         </button>
                         <button
-                          onClick={() => setDemoChatKey(k => k + 1)}
+                          onClick={() => setDemoChatKey((k) => k + 1)}
                           className="w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-500 hover:bg-slate-50 transition-colors"
                         >
                           Reset chat
@@ -2067,7 +2359,8 @@ export default function Dashboard() {
                 </div>
 
                 <p className="text-[10px] text-slate-400 leading-relaxed px-1">
-                  Switch demonstration modes between text input and voice note input.
+                  Switch demonstration modes between text input and voice note
+                  input.
                 </p>
               </div>
 
@@ -2109,27 +2402,42 @@ export default function Dashboard() {
                 <div className="flex-1 overflow-y-auto p-6 font-mono text-[11px] leading-relaxed space-y-3 custom-scrollbar">
                   {aiLogs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-600 italic">
-                      <p>Send a message to see the AI agent&apos;s logic flow...</p>
+                      <p>
+                        Send a message to see the AI agent&apos;s logic flow...
+                      </p>
                     </div>
                   ) : (
                     aiLogs.map((log, i) => {
                       const isSeparator = log.m.startsWith("─");
-                      const isError     = log.m.includes("❌");
-                      const isSuccess   = log.m.includes("✅");
-                      const isBuyer     = log.m.startsWith("📨");
-                      const color = isSeparator ? "text-slate-700"
-                                  : isError     ? "text-red-400"
-                                  : isSuccess   ? "text-green-400"
-                                  : isBuyer     ? "text-yellow-300"
-                                  : log.m.includes("Inventory") ? "text-blue-300"
-                                  : log.m.includes("Pricing") || log.m.includes("🧮") ? "text-purple-300"
-                                  : log.m.includes("Logistics") || log.m.includes("🚚") ? "text-orange-300"
-                                  : log.m.includes("Composer") || log.m.includes("📝") ? "text-pink-300"
-                                  : "text-slate-300";
+                      const isError = log.m.includes("❌");
+                      const isSuccess = log.m.includes("✅");
+                      const isBuyer = log.m.startsWith("📨");
+                      const color = isSeparator
+                        ? "text-slate-700"
+                        : isError
+                          ? "text-red-400"
+                          : isSuccess
+                            ? "text-green-400"
+                            : isBuyer
+                              ? "text-yellow-300"
+                              : log.m.includes("Inventory")
+                                ? "text-blue-300"
+                                : log.m.includes("Pricing") ||
+                                    log.m.includes("🧮")
+                                  ? "text-purple-300"
+                                  : log.m.includes("Logistics") ||
+                                      log.m.includes("🚚")
+                                    ? "text-orange-300"
+                                    : log.m.includes("Composer") ||
+                                        log.m.includes("📝")
+                                      ? "text-pink-300"
+                                      : "text-slate-300";
                       return (
                         <div key={i} className={isSeparator ? "my-1" : ""}>
                           {!isSeparator && (
-                            <span className="text-slate-600 mr-2 select-none">[{log.t}]</span>
+                            <span className="text-slate-600 mr-2 select-none">
+                              [{log.t}]
+                            </span>
                           )}
                           <span className={color}>{log.m}</span>
                         </div>
@@ -2139,6 +2447,14 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+          )}
+
+          {selectedOrderForReview && (
+            <OrderReviewModal
+              order={selectedOrderForReview}
+              onClose={() => setSelectedOrderForReview(null)}
+              onSave={() => merchantId && fetchData(merchantId)}
+            />
           )}
         </main>
       )}

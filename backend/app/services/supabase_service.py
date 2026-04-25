@@ -153,6 +153,25 @@ async def get_repeat_pending_order(customer_id: str) -> Optional[OrderRow]:
             return OrderRow(**row)
     return None
 
+async def get_requires_review_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent order that requires human review."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("requires_human_review", True)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        row = result.data[0]
+        notes = row.get("order_notes") or ""
+        if "repeat_order" in notes:
+            return OrderRow(**row)
+    return None
+
 
 async def create_order(
     customer_id: str,
@@ -179,6 +198,21 @@ async def create_order(
     )
     return OrderRow(**row.data[0])
 
+async def get_order_by_id(order_id: str) -> Optional[dict]:
+    """Fetch a single order with joined customer data."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*, customer(*)")
+        .eq("order_id", order_id)
+        .single()
+        .execute()
+    )
+    return result.data if result.data else None
+
+async def update_order(order_id: str, payload: dict) -> None:
+    """Generic update for any order columns."""
+    get_supabase().table("order").update(payload).eq("order_id", order_id).execute()
 
 async def update_order_status(order_id: str, status: OrderStatus, **extra) -> None:
     payload = {"order_status": status.value, **extra}
