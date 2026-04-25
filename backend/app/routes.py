@@ -1,6 +1,7 @@
 """Dashboard API routes — order management, inventory, stats."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -10,6 +11,14 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.models.schemas import DashboardStats, OrderStatus
 from app.services import supabase_service, twilio_service
+from pydantic import BaseModel
+class ResolveOrderRequest(BaseModel):
+    order_id: str
+    amount: float
+    status: str
+    notes: str
+    merchant_id: str
+
 
 logger = logging.getLogger(__name__)
 dashboard_router = APIRouter()
@@ -199,3 +208,110 @@ async def invite_team_member(body: InviteRequest):
         logger.warning("WhatsApp invite notification failed: %s", exc)
 
     return {"success": True}
+
+@dashboard_router.post("/orders/resolve")
+async def resolve_order(payload: ResolveOrderRequest):
+    """
+    Called by the Admin Dashboard Modal to manually correct an order.
+    Clears the human_review flag and notifies the buyer.
+    """
+    # 1. Validation
+    if payload.amount < 0:
+        raise HTTPException(status_code=400, detail="Order amount cannot be negative")
+
+    # 2. Extract Language from metadata
+    try:
+        metadata = json.loads(payload.notes)
+        lang = metadata.get("language") or metadata.get("intake_result", {}).get("language_detected", "ms")
+    except Exception:
+        lang = "ms"
+
+    # 3. Update the Order in DB
+    update_payload = {
+        "order_amount": payload.amount,
+        "order_status": payload.status,
+        "order_notes": payload.notes,
+        "requires_human_review": False,
+        "updated_at": "now()"
+    }
+    await supabase_service.update_order(payload.order_id, update_payload)
+    
+    order = await supabase_service.get_order_by_id(payload.order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    customer_phone = order['customer']['whatsapp_number']
+    
+    # 4. Notify the Buyer (Resume Pipeline message)
+    if payload.status == "Awaiting Confirmation":
+        msg = (
+            "✅ Ejen kami telah menyemak maklumat anda. Sila balas *YA* untuk sahkan jumlah baru RM" f"{payload.amount:.2f} ini. 😊" if lang == "ms"
+            else "✅ Our agent has reviewed your info. Please reply *YES* to confirm this new total of RM" f"{payload.amount:.2f}. 😊"
+        )
+    elif payload.status == "Confirmed":
+        msg = (
+            "✅ Pesanan anda telah disahkan secara manual. Kami akan atur penghantaran segera! 🚚" if lang == "ms"
+            else "✅ Your order has been manually confirmed. We are arranging delivery now! 🚚"
+        )
+    else:
+        msg = (
+            "Ejen kami telah mengemaskini maklumat pesanan anda. 🙏" if lang == "ms"
+            else "Our agent has updated your order details. 🙏"
+        )
+
+    await twilio_service.send_whatsapp_message(customer_phone, msg)
+    
+    # 5. Log the intervention
+    log_entry = f"📝 [Manual Review] Resolved. Status: {payload.status}. New Amount: RM{payload.amount:.2f}"
+    if payload.amount < 50:
+        log_entry += " (⚠️ Threshold Bypassed)"
+    
+    await supabase_service.log_message(
+        customer_id=order['customer_id'],
+        order_id=payload.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=log_entry
+    )
+
+    return {"success": True, "order_id": payload.order_id}
+
+@dashboard_router.patch("/orders/{order_id}/override")
+async def override_order(order_id: str, body: OverrideRequest):
+    """
+    Manual override by staff (e.g. Rejecting an order from the Kanban card).
+    """
+    # 1. Update DB
+    await supabase_service.update_order(
+        order_id, 
+        {
+            "order_status": body.status,
+            "order_notes": body.notes,
+            "requires_human_review": False,
+            "updated_at": "now()"
+        }
+    )
+    
+    # 2. Handle Notification for Rejections
+    if body.status in ["Failed", "Expired"]:
+        order = await supabase_service.get_order_by_id(order_id)
+        if order:
+            customer_phone = order['customer']['whatsapp_number']
+            # Simple language detection from notes
+            lang = "ms" if "ms" in (order.get("order_notes") or "") else "en"
+            
+            msg = (
+                "Maaf, pesanan anda tidak dapat diproses buat masa ini. Terima kasih! 😊" if lang == "ms"
+                else "Sorry, your order cannot be processed at this time. Thank you! 😊"
+            )
+            await twilio_service.send_whatsapp_message(customer_phone, msg)
+            
+            await supabase_service.log_message(
+                customer_id=order['customer_id'],
+                order_id=order_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg
+            )
+
+    return {"success": True, "order_id": order_id, "new_status": body.status}
