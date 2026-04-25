@@ -642,7 +642,7 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
                 {langEntries.map(([lang, count]) => (
                   <BarRow
                     key={lang}
-                    label={lang === "ms" ? "Bahasa Melayu / Rojak" : lang === "en" ? "English" : lang === "mixed" ? "Mixed" : lang}
+                    label={lang === "ms" ? "Bahasa Melayu" : lang === "en" ? "English" : lang === "mixed" ? "Bahasa Rojak" : lang}
                     value={`${count} orders`}
                     pct={Math.round((count / langTotal) * 100)}
                   />
