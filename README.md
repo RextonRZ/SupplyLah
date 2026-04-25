@@ -8,9 +8,9 @@ SupplyLah is an AI-powered wholesale order automation platform built for Malaysi
 
 ## Team Members
 
-1.Ooi Rui Zhe
-2.Vanness Liu Chuen Wei
-3.Ong Zhao Qia
+1. Ooi Rui Zhe
+2. Vanness Liu Chuen Wei
+3. Ong Zhao Qia
 
 ---
 
