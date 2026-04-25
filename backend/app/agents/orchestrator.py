@@ -589,7 +589,56 @@ async def _handle_repeat_order_reply(
         merged_items = previous_items
     else:
         # Buyer is specifying modifications — use LLM to merge their reply with previous items
-        merged_items = await _merge_repeat_modifications(raw_text, previous_items)
+        merge_result = await _merge_repeat_modifications(raw_text, previous_items)
+        
+        # Ambiguous and escalation
+        if merge_result.get("status") == "ambiguous":
+            clarification_count = notes_data.get("clarification_count", 0) + 1
+            
+            if clarification_count >= 3:
+                # Max retries hit. Expire the AI order loop and escalate.
+                notes_data["escalated"] = True
+                await supabase_service.update_order_status(
+                    repeat_order.order_id, 
+                    OrderStatus.EXPIRED, # Expire the AI flow to break the loop
+                    order_notes=_json.dumps(notes_data)
+                )
+                msg = (
+                    "Maaf, saya tak pasti kuantiti yang tepat. Saya akan minta ejen manusia untuk hubungi anda sebentar lagi ya! 🙏" if lang == "ms"
+                    else "Sorry, I'm not sure about the exact quantity. I'll transfer you to a human agent to help you out! 🙏"
+                )
+                await supabase_service.log_message(
+                    customer_id=customer.customer_id,
+                    order_id=repeat_order.order_id,
+                    sender_type="agent",
+                    message_type="text",
+                    content=msg,
+                )
+                emit("🚨 [Orchestrator] Vague quantity limit reached — Escalating to human agent.")
+                return msg
+
+            # Ask for clarification again
+            notes_data["clarification_count"] = clarification_count
+            await supabase_service.update_order_status(
+                repeat_order.order_id,
+                OrderStatus.PENDING,
+                order_notes=_json.dumps(notes_data)
+            )
+            msg = (
+                "Boleh nyatakan nombor/kuantiti yang tepat? Contohnya: 'tambah 2' atau 'jadikan 5'. 😊" if lang == "ms"
+                else "Could you specify the exact number? For example: 'add 2' or 'make it 5'. 😊"
+            )
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=repeat_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg,
+            )
+            return msg
+            
+        # If success, extract the items array
+        merged_items = merge_result.get("items",[])
 
     if not merged_items:
         if lang == "ms":
@@ -704,7 +753,7 @@ async def _handle_repeat_order_reply(
 async def _merge_repeat_modifications(
     raw_text: str,
     previous_items: list[dict],
-) -> list[dict]:
+) -> dict:
     """Use LLM to merge buyer's modifications with previous order items.
 
     Returns a list of dicts with product_name and quantity.
@@ -716,17 +765,19 @@ async def _merge_repeat_modifications(
     prev_summary = "\n".join(
         f"- {it['product_name']}: {it['quantity']} unit" for it in previous_items
     )
-
+    
     system = (
         "You are an order modification assistant. The buyer previously ordered:\n"
         f"{prev_summary}\n\n"
-        "Now they want to modify their order. Parse their message and output the FULL updated item list "
-        "as a JSON array. Each item must have 'product_name' (exact same name as before) and 'quantity' (integer). "
-        "If they say 'sama je' / 'same' / 'lain sama' for an item, keep the original quantity. "
-        "If they say 'tambah X' / 'add X' / 'X more', add X to the original quantity. "
-        "If they say 'kurang X' / 'X less', subtract X. "
-        "Only include items that should remain in the order. "
-        "Output ONLY the JSON array, no other text."
+        "Now they want to modify their order. Parse their message and output the FULL updated item list.\n\n"
+        "RULES:\n"
+        "1. EXACT NUMBERS: If the buyer specifies an exact number (e.g. 'tambah 2', 'add 1', 'jadikan 5'), "
+        "calculate the new quantities and return:\n"
+        '{"status": "success", "items":[{"product_name": "...", "quantity": ...}]}\n\n'
+        "2. AMBIGUOUS: If they are vague and DO NOT specify a number (e.g. 'tambah sikit', 'more', 'less', 'tambah sikit je'), "
+        "DO NOT guess the quantity. Immediately return:\n"
+        '{"status": "ambiguous", "items":[]}\n\n'
+        "Output ONLY the JSON object. Do not include any other text."
     )
 
     messages = [
@@ -746,14 +797,19 @@ async def _merge_repeat_modifications(
         fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
         if fence_match:
             raw_output = fence_match.group(1).strip()
-        items = _json.loads(raw_output)
-        if isinstance(items, list) and all("product_name" in i and "quantity" in i for i in items):
-            return items
-        return []
+        
+        if raw_output.startswith("```"):
+            raw_output = raw_output.strip("`").strip()
+            if raw_output.startswith("json"):
+                raw_output = raw_output[4:].strip()
+        result = _json.loads(raw_output)
+        if isinstance(result, list):
+            return {"status": "success", "items": result}
+            
+        return result
     except Exception as exc:
         logger.error("Merge repeat modifications error: %s", exc)
-        return []
-
+        return {"status": "error", "items":[]}
 
 # ─────────────────────────────────────────
 # Core orchestration handlers
