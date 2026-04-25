@@ -37,14 +37,14 @@ const getInitialMessages = (
 };
 
 const MALAY_WORDS =
-  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
+  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tidak|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
 const EN_WORDS =
-  /\b(please|want|need|send|deliver|thank|hello|hi|yes|cancel|confirm|address|price|how|order)\b/i;
+  /\b(please|want|need|send|deliver|thank|hello|hi|yes|no|cancel|confirm|address|price|how|order|i|can|know|what|is|the|for|and|are|we|do|have|stock|remaining|left)\b/i;
 
 function getImmediateAck(text: string): string {
   const msHits = (text.match(MALAY_WORDS) || []).length;
   const enHits = (text.match(EN_WORDS) || []).length;
-  const isMalay = msHits >= enHits;
+  const isMalay = msHits > enHits; // ties default to English
   return isMalay
     ? "Ok tunggu jap! 🙏 Saya tengah proses pesanan ni..."
     : "On it! 🔍 Processing your order, give me a sec...";
@@ -62,9 +62,6 @@ function logToHint(log: string): string | null {
   return null;
 }
 
-function now() {
-  return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
-}
 
 function WhatsAppText({ text }: { text: string }) {
   function parseLine(line: string): React.ReactNode {
@@ -208,6 +205,12 @@ export default function MockChat({
     };
     es.onerror = () => es.close();
 
+    // Wait for EventSource to connect before sending the fetch
+    await new Promise<void>((resolve) => {
+      es.addEventListener("open", () => resolve(), { once: true });
+      setTimeout(resolve, 500);
+    });
+
     const t0 = Date.now();
 
     try {
@@ -242,7 +245,7 @@ export default function MockChat({
         setMessages((prev) => [...prev, { role: "agent", text: replies[i], time: now() }]);
       }
 
-      setVoiceFile((prev) => (prev === "order.m4a" ? "ok.m4a" : "order.m4a"));
+      setVoiceFile("ok.m4a");
     } catch {
       es.close();
       onLog?.("❌ [System] Voice processing failed — is the backend running?");
@@ -314,6 +317,13 @@ export default function MockChat({
       } catch {}
     };
     es.onerror = () => es.close();
+
+    // Wait for EventSource to connect before sending the fetch,
+    // otherwise early SSE events (like "Dapat!" ack) may be missed
+    await new Promise<void>((resolve) => {
+      es.addEventListener("open", () => resolve(), { once: true });
+      setTimeout(resolve, 500); // fallback timeout
+    });
 
     const t0 = Date.now();
 
@@ -405,7 +415,7 @@ export default function MockChat({
                   <span className="text-[10px] text-slate-500">0:{String(m.recordingDuration ?? 1).padStart(2, "0")}</span>
                 </div>
               ) : (
-                <WhatsAppText text={m.text} />
+                <WhatsAppText text={m.text ?? ""} />
               )}
               <p className="text-right text-[10px] text-slate-400 mt-1">
                 {m.time}
@@ -461,32 +471,74 @@ export default function MockChat({
               ➤
             </button>
           </>
-        ) : (
-          <div className="flex-1 flex items-center gap-3">
-            <div className="flex-1 bg-slate-100 rounded-full px-4 py-2.5 text-sm text-slate-400">
-              {isRecording ? (
-                <span className="text-red-500 font-bold animate-pulse flex items-center gap-2">
-                  🔴 Recording... {recordingTime}s
-                </span>
-              ) : (
-                "Hold to record..."
-              )}
+        ) : isRecording ? (
+          /* WhatsApp-style recording indicator */
+          <>
+            <div className="flex-1 flex items-center gap-2.5 bg-white rounded-2xl border border-red-200 px-3 py-2 h-10">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+              <span className="text-red-500 text-sm font-medium tabular-nums">
+                {String(Math.floor(recordingTime / 60)).padStart(2, "0")}:{String(recordingTime % 60).padStart(2, "0")}
+              </span>
+              <div className="flex-1 flex items-center gap-0.5 h-5">
+                {Array.from({ length: 20 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-0.5 bg-red-400 rounded-full animate-pulse"
+                    style={{
+                      height: `${30 + Math.sin(i * 0.8) * 40}%`,
+                      animationDelay: `${i * 60}ms`,
+                    }}
+                  />
+                ))}
+              </div>
             </div>
             <button
-              onMouseDown={startRecording}
               onMouseUp={stopAndSendVoice}
-              onTouchStart={startRecording}
               onTouchEnd={stopAndSendVoice}
-              disabled={loading}
-              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all shadow-lg active:scale-125 ${
-                isRecording
-                  ? "bg-red-500 text-white"
-                  : "bg-green-600 text-white"
-              } disabled:opacity-40`}
+              className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center shrink-0 shadow"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
             </button>
-          </div>
+          </>
+        ) : (
+          <>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = e.target.scrollHeight + "px";
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder="Type or hold mic…"
+              rows={1}
+              className="flex-1 self-end resize-none rounded-2xl border border-slate-300 px-4 py-2 text-sm leading-5 focus:outline-none focus:border-green-400 max-h-[100px] overflow-y-auto"
+            />
+            {input.trim() ? (
+              <button
+                onClick={sendMessage}
+                disabled={loading}
+                className="w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center hover:bg-green-700 disabled:opacity-40 shrink-0"
+              >
+                ➤
+              </button>
+            ) : (
+              <button
+                onMouseDown={startRecording}
+                onTouchStart={startRecording}
+                disabled={loading}
+                className="w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center shrink-0 disabled:opacity-40"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

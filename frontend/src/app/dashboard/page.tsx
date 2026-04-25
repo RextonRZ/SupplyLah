@@ -642,7 +642,7 @@ function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory:
                 {langEntries.map(([lang, count]) => (
                   <BarRow
                     key={lang}
-                    label={lang === "ms" ? "Bahasa Melayu / Rojak" : lang === "en" ? "English" : lang === "mixed" ? "Mixed" : lang}
+                    label={lang === "ms" ? "Bahasa Melayu" : lang === "en" ? "English" : lang === "mixed" ? "Bahasa Rojak" : lang}
                     value={`${count} orders`}
                     pct={Math.round((count / langTotal) * 100)}
                   />
@@ -1465,63 +1465,137 @@ function InventoryAdminTab({
 function DashboardSkeleton() {
   return (
     <main className="px-6 py-4 space-y-4">
-      {/* Stat bar */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div
-            key={i}
-            className="bg-white rounded-xl border border-slate-200 p-3 flex flex-col items-center gap-2"
-          >
-            <Sk className="h-7 w-12 rounded-lg" />
-            <Sk className="h-3 w-14 rounded-md" />
+      {/* KPI strip — 4 cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+            <Sk className="h-3 w-24 rounded-md" />
+            <Sk className="h-8 w-16 rounded-lg" />
+            <Sk className="h-2.5 w-32 rounded-md" />
           </div>
         ))}
       </div>
 
-      {/* Main grid */}
+      {/* Kanban + Sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        {/* Kanban — 3 columns */}
-        <div className="lg:col-span-3 grid grid-cols-3 gap-3">
-          {Array.from({ length: 3 }).map((_, col) => (
-            <div
-              key={col}
-              className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3"
-            >
-              <Sk className="h-4 w-24 rounded-md" />
-              {Array.from({ length: col === 1 ? 3 : 2 }).map((_, i) => (
-                <div key={i} className="bg-slate-50 rounded-xl p-3 space-y-2">
-                  <Sk className="h-3 w-full rounded-md" />
-                  <Sk className="h-3 w-3/4 rounded-md" />
-                  <div className="flex justify-between pt-1">
-                    <Sk className="h-3 w-16 rounded-md" />
-                    <Sk className="h-5 w-20 rounded-full" />
+        {/* Kanban — 5 columns */}
+        <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 overflow-hidden">
+          {/* Header */}
+          <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+            <Sk className="h-4 w-28 rounded-md" />
+            <Sk className="h-3 w-20 rounded-md" />
+          </div>
+          <div className="grid grid-cols-5 divide-x divide-slate-100">
+            {Array.from({ length: 5 }).map((_, col) => (
+              <div key={col} className="p-2 space-y-2 min-h-[320px]">
+                <div className="flex items-center justify-between px-1 py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <Sk className="h-2 w-2 rounded-full" />
+                    <Sk className="h-3 w-14 rounded-md" />
                   </div>
+                  <Sk className="h-3 w-4 rounded-md" />
                 </div>
-              ))}
-            </div>
-          ))}
-        </div>
-
-        {/* Sidebar */}
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-            <Sk className="h-4 w-20 rounded-md" />
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Sk className="h-8 w-8 rounded-full shrink-0" />
-                <div className="flex-1 space-y-1.5">
-                  <Sk className="h-3 w-full rounded-md" />
-                  <Sk className="h-2.5 w-2/3 rounded-md" />
-                </div>
+                {Array.from({ length: col === 0 ? 3 : col === 2 ? 2 : 1 }).map((_, i) => (
+                  <div key={i} className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1.5">
+                    <Sk className="h-3 w-full rounded-md" />
+                    <Sk className="h-2.5 w-3/4 rounded-md" />
+                    <Sk className="h-2 w-1/2 rounded-md" />
+                  </div>
+                ))}
               </div>
             ))}
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-            <Sk className="h-4 w-24 rounded-md" />
+        </div>
+
+        {/* Sidebar — Alerts + Inventory */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100">
+              <Sk className="h-4 w-28 rounded-md" />
+            </div>
+            <div className="p-3 space-y-2">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <div key={i} className="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-1.5">
+                  <Sk className="h-3 w-full rounded-md" />
+                  <Sk className="h-2.5 w-2/3 rounded-md" />
+                  <Sk className="h-2 w-1/2 rounded-md" />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100">
+              <Sk className="h-4 w-24 rounded-md" />
+            </div>
+            <div className="p-3 space-y-2.5">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="space-y-1">
+                  <div className="flex justify-between">
+                    <Sk className="h-2.5 w-28 rounded-md" />
+                    <Sk className="h-2.5 w-6 rounded-md" />
+                  </div>
+                  <Sk className="h-1.5 w-full rounded-full" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Analytics section */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Revenue card */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+          <Sk className="h-4 w-36 rounded-md" />
+          <Sk className="h-10 w-32 rounded-lg" />
+          <div className="grid grid-cols-3 gap-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="space-y-1">
+                <Sk className="h-2.5 w-full rounded-md" />
+                <Sk className="h-5 w-3/4 rounded-md" />
+              </div>
+            ))}
+          </div>
+          {/* Bar chart */}
+          <div className="flex items-end gap-1 h-16 pt-2">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <Sk key={i} className="flex-1 rounded-t-sm" style={{ height: `${30 + Math.random() * 60}%` }} />
+            ))}
+          </div>
+        </div>
+        {/* AI Performance */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+          <Sk className="h-4 w-40 rounded-md" />
+          <div className="grid grid-cols-2 gap-3">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex justify-between items-center">
-                <Sk className="h-3 w-28 rounded-md" />
-                <Sk className="h-3 w-12 rounded-md" />
+              <div key={i} className="space-y-1.5">
+                <Sk className="h-2.5 w-full rounded-md" />
+                <Sk className="h-6 w-2/3 rounded-md" />
+              </div>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="flex justify-between items-center gap-2">
+                <Sk className="h-2.5 w-16 rounded-md" />
+                <Sk className="h-2 flex-1 rounded-full" />
+                <Sk className="h-2.5 w-8 rounded-md" />
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Top Products */}
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+          <Sk className="h-4 w-36 rounded-md" />
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Sk className="h-4 w-4 rounded shrink-0" />
+                <div className="flex-1 space-y-1">
+                  <Sk className="h-2.5 w-full rounded-md" />
+                  <Sk className="h-1.5 w-full rounded-full" />
+                </div>
+                <Sk className="h-2.5 w-8 rounded-md shrink-0" />
               </div>
             ))}
           </div>
@@ -2025,7 +2099,7 @@ export default function Dashboard() {
                     Pipeline
                   </h3>
                   <button
-                    onClick={() => clearAiLogs}
+                    onClick={clearAiLogs}
                     className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
                   >
                     Clear

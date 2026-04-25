@@ -40,12 +40,27 @@ Return ONLY a valid JSON object — do NOT include a quote_message field (the sy
 
 When `is_substituted` is true, set `original_product_name` to the product the buyer originally asked for, and `discount_pct` to the substitution discount percentage (e.g. 10 for 10% off).
 
-## Substitution Rules
-- Only propose ONE level of substitution (MVP constraint)
-- Choose the substitute with the **closest unit price** and **sufficient stock**
-- Never silently substitute — always apologise, state available stock, then propose the substitute
-- Do NOT use ❌ for low-stock items — use a polite apology sentence instead
-- Format: apologise → state how many are available → propose substitute on a new line
+## Stock Handling Rules
+
+### Partial stock (0 < available < requested)
+- Set `fulfilled_qty` to what is actually available, `requested_qty` to what was asked
+- Set `is_substituted: false` — this is a partial fulfillment, NOT a substitution
+- Check if a substitute product exists with sufficient stock for the shortfall:
+  - If YES: add the substitute as a **separate item** with `is_substituted: true`, `original_product_name` = original item, `fulfilled_qty` = shortfall amount
+  - If NO: include only the partial quantity, set `substitute_reason: "no suitable substitute available"`
+
+### Zero stock (available = 0)
+- Do NOT include the item in the `items` array
+- Set `order_feasible: false` only if ALL items are out of stock
+- Check for a substitute: if found, include substitute with `is_substituted: true`
+- If no substitute: set `notes` to indicate which items are out of stock for restock notification
+
+### Substitution Rules
+- **ONLY substitute if the "Business rules" section explicitly names a substitute for that product.** Do NOT invent substitutes based on price similarity or your own judgement.
+- If the business rules say `If "X" is out of stock, offer "Y"` — use Y as the substitute.
+- If no substitute is listed for a product in the business rules → set `is_substituted: false`, do NOT add any substitute item, and set `substitute_reason: "no_substitute_configured"`.
+- NEVER silently reduce quantity without setting `requested_qty` correctly
+- Do NOT use ❌ for low-stock items
 
 ## Pricing Rules
 - Apply ONLY the discount and delivery fee rules explicitly stated in the "Business rules" section in your context
