@@ -17,7 +17,8 @@ export default function OrderCard({ order, onOverride, onSelectOrder }: Props) {
 
   const isAlert = order.requires_human_review
     && order.order_status !== "Confirmed"
-    && order.order_status !== "Dispatched";
+    && order.order_status !== "Dispatched"
+    && order.order_status !== "Expired";
 
   const createdAgo = order.created_at
     ? formatDistanceToNow(new Date(order.created_at), { addSuffix: true })
@@ -26,14 +27,23 @@ export default function OrderCard({ order, onOverride, onSelectOrder }: Props) {
   async function handleOverride(status: string) {
     setOverriding(true);
     try {
-      await fetch(`${BACKEND_URL}/api/orders/${order.order_id}/override`, {
+      const res = await fetch(`${BACKEND_URL}/api/orders/${order.order_id}/override`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, notes: "Manual override by staff" }),
+        body: JSON.stringify({ 
+          status: status, 
+          notes: `Manual override to ${status} by operator.` 
+        }),
       });
-      onOverride?.();
-    } catch {}
-    finally { setOverriding(false); }
+      
+      if (res.ok) {
+        onOverride?.(); // This refreshes the Kanban board in Dashboard.tsx
+      }
+    } catch (err) {
+      console.error("Override failed:", err);
+    } finally {
+      setOverriding(false);
+    }
   }
 
   return (

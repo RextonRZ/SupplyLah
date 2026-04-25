@@ -8,7 +8,7 @@ import { Order, Product, DashboardStats } from "@/lib/types";
 import KanbanBoard from "@/components/KanbanBoard";
 import AlertsPanel from "@/components/AlertsPanel";
 import InventoryPanel from "@/components/InventoryPanel";
-import MockChat from "@/components/MockChat";
+import MockChat, { ChatMessage } from "@/components/MockChat";
 import OrderReviewModal from "@/components/OrderReviewModal";
 
 const DEMO_MERCHANT_ID =
@@ -258,7 +258,8 @@ function ProfileMenu({
             <div className="py-1.5">
               {menuItem("", "Manage Inventory", "inventory")}
               {userRole === "owner" && menuItem("", "Team Members", "team")}
-              {userRole === "owner" && menuItem("", "Store Settings", "settings")}
+              {userRole === "owner" &&
+                menuItem("", "Store Settings", "settings")}
             </div>
 
             {/* Footer */}
@@ -355,12 +356,20 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
     if (!email || !phone || inviting) return;
     setInviting(true);
     setSuccessEmail("");
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     const businessName = user?.user_metadata?.business_name || "SupplyLah";
     const res = await fetch(`${BACKEND_URL}/api/team/invite`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ merchant_id: merchantId, email, phone, role, business_name: businessName }),
+      body: JSON.stringify({
+        merchant_id: merchantId,
+        email,
+        phone,
+        role,
+        business_name: businessName,
+      }),
     });
     if (res.ok) {
       setSuccessEmail(email);
@@ -414,7 +423,8 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
           <div className="mt-3 flex items-center gap-2.5 px-4 py-3 bg-teal-50 border border-teal-200 rounded-xl">
             <span className="text-teal-600 text-lg">✓</span>
             <p className="text-sm text-teal-800 font-medium">
-              Invite sent to <span className="font-bold">{successEmail}</span> — they'll receive an email and WhatsApp to set up their account.
+              Invite sent to <span className="font-bold">{successEmail}</span> —
+              they'll receive an email and WhatsApp to set up their account.
             </p>
           </div>
         )}
@@ -512,7 +522,17 @@ function StatRow({
   );
 }
 
-function BarRow({ label, value, pct, color = "bg-teal-500" }: { label: string; value: string; pct: number; color?: string }) {
+function BarRow({
+  label,
+  value,
+  pct,
+  color = "bg-teal-500",
+}: {
+  label: string;
+  value: string;
+  pct: number;
+  color?: string;
+}) {
   return (
     <div className="py-2 border-b border-slate-50 last:border-0">
       <div className="flex justify-between items-baseline mb-1.5">
@@ -533,11 +553,18 @@ function BarRow({ label, value, pct, color = "bg-teal-500" }: { label: string; v
   );
 }
 
-function AnalyticsDashboard({ orders }: { orders: Order[]; inventory: Product[] }) {
-  const now           = new Date();
-  const todayStr      = now.toISOString().slice(0, 10);
-  const weekAgo       = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-  const sevenDaysAgo  = new Date(now.getTime() - 7 * 86400000);
+function AnalyticsDashboard({
+  orders,
+}: {
+  orders: Order[];
+  inventory: Product[];
+}) {
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const weekAgo = new Date(now.getTime() - 7 * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000);
 
   const confirmedOrders = orders.filter(
     (o) => o.order_status === "Confirmed" || o.order_status === "Dispatched",
@@ -1830,7 +1857,11 @@ function DashboardSkeleton() {
           {/* Bar chart */}
           <div className="flex items-end gap-1 h-16 pt-2">
             {[55, 80, 40, 90, 60, 75, 50].map((h, i) => (
-              <div key={i} className="flex-1 rounded-t-sm bg-slate-200 animate-pulse" style={{ height: `${h}%` }} />
+              <div
+                key={i}
+                className="flex-1 rounded-t-sm bg-slate-200 animate-pulse"
+                style={{ height: `${h}%` }}
+              />
             ))}
           </div>
         </div>
@@ -1899,7 +1930,9 @@ export default function Dashboard() {
   const [chatMode, setChatMode] = useState<"text" | "voice">("text");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
-  const [userRole, setUserRole] = useState<"owner" | "Warehouse Manager" | "Wholesale Supplier">("owner");
+  const [userRole, setUserRole] = useState<
+    "owner" | "Warehouse Manager" | "Wholesale Supplier"
+  >("owner");
   const [aiLogs, setAiLogs] = useState<{ t: string; m: string }[]>([]);
   const [demoPhone, setDemoPhone] = useState("+60198765432");
   const [demoName, setDemoName] = useState("Demo Customer");
@@ -1909,6 +1942,10 @@ export default function Dashboard() {
   const [demoChatKey, setDemoChatKey] = useState(0); // increment to force MockChat remount
   const [selectedOrderForReview, setSelectedOrderForReview] =
     useState<Order | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]); 
+  const [voiceFile, setVoiceFile] = useState<"order.m4a" | "ok.m4a">(
+    "order.m4a",
+  );
 
   /* Resolve auth + merchant, THEN set merchantId to trigger fetch */
   useEffect(() => {
@@ -2042,6 +2079,12 @@ export default function Dashboard() {
     }
     setLastRefresh(new Date());
     setLoading(false);
+  }, []);
+
+  const handleClearChat = useCallback(() => {
+    // We'll let MockChat define the "Initial Message" or just set to empty
+    setChatMessages([]);
+    setVoiceFile("order.m4a");
   }, []);
 
   /* Only start fetching once merchantId is resolved */
@@ -2184,24 +2227,34 @@ export default function Dashboard() {
       {/* Tabs */}
       <div className="px-6 pt-4 flex gap-2 overflow-x-auto pb-2">
         {[
-          { id: "command",   label: "🏗 Command Centre", roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
-          { id: "inventory", label: "📦 Inventory",       roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
-          { id: "team",      label: "👥 Team",            roles: ["owner"] },
-          { id: "settings",  label: "⚙️ Settings",        roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
-          { id: "demo",      label: "💬 Demo Chat",       roles: ["owner"] },
-        ].filter(({ roles }) => roles.includes(userRole)).map(({ id, label }) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id as any)}
-            className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
-              activeTab === id
-                ? "bg-teal-700 text-white shadow-sm"
-                : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+          {
+            id: "command",
+            label: "🏗 Command Centre",
+            roles: ["owner", "Warehouse Manager", "Wholesale Supplier"],
+          },
+          {
+            id: "inventory",
+            label: "📦 Inventory",
+            roles: ["owner", "Warehouse Manager", "Wholesale Supplier"],
+          },
+          { id: "team", label: "👥 Team", roles: ["owner"] },
+          { id: "settings", label: "⚙️ Settings", roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
+          { id: "demo", label: "💬 Demo Chat", roles: ["owner"] },
+        ]
+          .filter(({ roles }) => roles.includes(userRole))
+          .map(({ id, label }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id as any)}
+              className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
+                activeTab === id
+                  ? "bg-teal-700 text-white shadow-sm"
+                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
       </div>
 
       {/* Skeleton while loading, then real content */}
@@ -2420,7 +2473,7 @@ export default function Dashboard() {
                   <button
                     onClick={() => {
                       setChatMode("text");
-                      setDemoChatKey((k) => k + 1);
+                      // setDemoChatKey((k) => k + 1);
                     }}
                     className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors pb- ${chatMode === "text" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
                   >
@@ -2429,7 +2482,7 @@ export default function Dashboard() {
                   <button
                     onClick={() => {
                       setChatMode("voice");
-                      setDemoChatKey((k) => k + 1);
+                      // setDemoChatKey((k) => k + 1);
                     }}
                     className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors ${chatMode === "voice" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
                   >
@@ -2459,6 +2512,10 @@ export default function Dashboard() {
                     chatMode={chatMode}
                     shopName={profile.businessName || "Demo Wholesaler"}
                     onLog={addLog}
+                    messages={chatMessages}
+                    setMessages={setChatMessages}
+                    voiceFile={voiceFile}
+                    setVoiceFile={setVoiceFile}
                   />
                 </div>
               </div>

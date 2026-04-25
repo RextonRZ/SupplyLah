@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { supabase, BACKEND_URL } from "@/lib/supabase";
 
-interface ChatMessage {
+export interface ChatMessage {
   role: "buyer" | "agent";
   text?: string;
   audioUrl?: string;
@@ -99,6 +99,10 @@ export default function MockChat({
   shopName,
   chatMode,
   onLog,
+  messages,      
+  setMessages,  
+  voiceFile,     
+  setVoiceFile, 
 }: {
   merchantId?: string;
   fromPhone?: string;
@@ -106,25 +110,33 @@ export default function MockChat({
   shopName?: string;
   chatMode: "text" | "voice";
   onLog?: (message: string) => void;
+  messages: ChatMessage[];
+  setMessages: (msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  voiceFile: "order.m4a" | "ok.m4a";
+  setVoiceFile: React.Dispatch<React.SetStateAction<"order.m4a" | "ok.m4a">>;
 }) {
   const resolvedMerchant = merchantId || DEMO_MERCHANT;
-  const [voiceFile, setVoiceFile] = useState<"order.m4a" | "ok.m4a">(
-    "order.m4a",
-  );
   const now = useCallback(() => {
-    // Memoize now function
-    return new Date().toLocaleTimeString("en-MY", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
   }, []);
+
+  useEffect(() => {
+  // Only set initial messages if the parent array is actually empty.
+  // This allows tab-switching to keep the history stored in Dashboard.tsx.
+  if (!messages || messages.length === 0) {
+    setMessages(getInitialMessages(chatMode, now));
+  }
+}, [chatMode, now, setMessages]);
+
+  const clearHistory = () => {
+    setMessages(getInitialMessages(chatMode, now));
+    setVoiceFile("order.m4a");
+    onLog?.("🗑️ Chat history cleared by user.");
+  };
 
   const phone = fromPhone || DEFAULT_PHONE;
   const name = fromName || DEFAULT_NAME;
   const shop = shopName || "Demo Wholesaler";
-  const [messages, setMessages] = useState<ChatMessage[]>(
-    getInitialMessages(chatMode, now),
-  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [chatHint, setChatHint] = useState("Thinking…");
@@ -136,10 +148,6 @@ export default function MockChat({
   const esRef = useRef<EventSource | null>(null);
   const sseShown = useRef<Set<string>>(new Set());
   const nameSynced = useRef(false);
-
-  useEffect(() => {
-    setMessages(getInitialMessages(chatMode, now));
-  }, [chatMode, now]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -374,13 +382,13 @@ export default function MockChat({
   return (
     <div className="bg-white flex flex-col h-full overflow-hidden">
       {/* Header with Mode Switcher */}
-      <div className="bg-[#075E54] text-white px-5 h-24 py-4 items-end gap-3">
+      <div className="bg-[#075E54] text-white px-5 h-24 py-4 items-end gap-3 flex justify-between relative">
         <img
           src="/status-bar.png"
           className="absolute top-0 left-0 w-full h-12 object-fill z-20 pointer-events-none"
           alt="status bar"
         />
-        <div className="flex items-center pt-7 gap-3 mb-3">
+        <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-green-400 flex items-center justify-center text-xl">
             🏪
           </div>
@@ -391,6 +399,16 @@ export default function MockChat({
             </p>
           </div>
         </div>
+
+        <button 
+           onClick={(e) => { e.stopPropagation(); clearHistory(); }}
+           className="mb-1 p-1.5 rounded-full hover:bg-black/10 transition-colors"
+           title="Clear Chat"
+         >
+           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+             <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+           </svg>
+         </button>
       </div>
 
       {/* Messages */}
