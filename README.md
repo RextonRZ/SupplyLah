@@ -8,11 +8,9 @@ SupplyLah is an AI-powered wholesale order automation platform built for Malaysi
 
 ## Team Members
 
-| Name | Role |
-|------|------|
-| Ooi Rui Zhe | Multi-Agent Orchestration, Frontend Dashboard, Mock Chat Demo |
-| Vanness Liu Chuen Wei | FastAPI Backend, Supabase Schema, Voice Transcription Pipeline |
-| Ong Zhao Qian | PRD, QA Testing, Prompt Engineering |
+1.Ooi Rui Zhe
+2.Vanness Liu Chuen Wei
+3.Ong Zhao Qia
 
 ---
 
