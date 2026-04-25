@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     google_sheets_id: str = ""
     google_credentials_path: str = "credentials.json"
 
+    # Frontend URL (used for invite redirect)
+    frontend_url: str = "http://localhost:3000"
+
     # App
     default_merchant_id: str = "00000000-0000-0000-0000-000000000001"
     confirmation_timeout_minutes: int = 30

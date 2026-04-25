@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.models.schemas import DashboardStats, OrderStatus
-from app.services import supabase_service
+from app.services import supabase_service, twilio_service
 
 logger = logging.getLogger(__name__)
 dashboard_router = APIRouter()
@@ -109,3 +109,93 @@ async def get_stats(merchant_id: str = None):
     )
     _stats_cache[mid] = {"ts": time.monotonic(), "data": result}
     return result
+
+
+# ─────────────────────────────────────────
+# Team Invite
+# ─────────────────────────────────────────
+
+class InviteRequest(BaseModel):
+    merchant_id: str
+    email: str
+    phone: str
+    role: str
+    business_name: str = "SupplyLah"
+
+ROLE_ACCESS = {
+    "Warehouse Manager": "View and manage orders and inventory. Cannot access settings or team.",
+    "Wholesale Supplier": "Read-only view of orders and stock levels.",
+}
+
+@dashboard_router.post("/team/invite")
+async def invite_team_member(body: InviteRequest):
+    import httpx as _httpx
+    settings = get_settings()
+
+    if body.role not in ROLE_ACCESS:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {body.role}")
+
+    # Use httpx directly with service key — bypasses Python SDK HTTP/1.1 override issue
+    _headers = {
+        "apikey": settings.supabase_service_key,
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+
+    # 1. Upsert via SECURITY DEFINER RPC — bypasses RLS entirely
+    async with _httpx.AsyncClient() as http:
+        resp = await http.post(
+            f"{settings.supabase_url}/rest/v1/rpc/upsert_team_member",
+            headers=_headers,
+            json={
+                "p_merchant_id": body.merchant_id,
+                "p_email": body.email,
+                "p_phone": body.phone,
+                "p_role": body.role,
+            },
+        )
+        if resp.status_code >= 400:
+            logger.error("upsert_team_member RPC failed: %s %s", resp.status_code, resp.text)
+            raise HTTPException(status_code=500, detail="Failed to save team member")
+
+    # 2. Send Supabase auth invite email via Admin REST API
+    try:
+        async with _httpx.AsyncClient() as http:
+            resp = await http.post(
+                f"{settings.supabase_url}/auth/v1/invite",
+                headers={
+                    "apikey": settings.supabase_service_key,
+                    "Authorization": f"Bearer {settings.supabase_service_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "email": body.email,
+                    "redirect_to": f"{settings.frontend_url}/auth/callback",
+                    "data": {
+                        "merchant_id": body.merchant_id,
+                        "role": body.role,
+                        "business_name": body.business_name,
+                    },
+                },
+            )
+            if resp.status_code >= 400:
+                logger.warning("Supabase invite email failed: %s %s", resp.status_code, resp.text)
+    except Exception as exc:
+        logger.warning("Supabase invite email failed: %s", exc)
+
+    # 3. Send WhatsApp notification
+    access_desc = ROLE_ACCESS.get(body.role, "")
+    wa_msg = (
+        f"Hi! You've been invited to join *{body.business_name}* on SupplyLah 🎉\n\n"
+        f"Role: *{body.role}*\n"
+        f"Access: {access_desc}\n\n"
+        f"Check your email ({body.email}) to set up your password and log in.\n"
+        f"📲 Login at: https://supplylah.vercel.app/login"
+    )
+    try:
+        await twilio_service.send_whatsapp_message(body.phone, wa_msg)
+    except Exception as exc:
+        logger.warning("WhatsApp invite notification failed: %s", exc)
+
+    return {"success": True}

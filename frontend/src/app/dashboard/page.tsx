@@ -120,8 +120,10 @@ function ProfileMenu({
   isAuthenticated,
   onLogout,
   onSelectTab,
+  userRole,
 }: {
   profile: UserProfile;
+  userRole: "owner" | "Warehouse Manager" | "Wholesale Supplier";
   isAuthenticated: boolean;
   onLogout: () => void;
   onSelectTab: (tabId: "settings" | "team" | "inventory") => void;
@@ -251,11 +253,11 @@ function ProfileMenu({
               </div>
             </div>
 
-            {/* Menu items */}
+            {/* Menu items — filtered by role */}
             <div className="py-1.5">
               {menuItem("", "Manage Inventory", "inventory")}
-              {menuItem("", "Team Members", "team")}
-              {menuItem("", "Store Settings", "settings")}
+              {userRole === "owner" && menuItem("", "Team Members", "team")}
+              {userRole === "owner" && menuItem("", "Store Settings", "settings")}
             </div>
 
             {/* Footer */}
@@ -329,13 +331,17 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("Warehouse Manager");
   const [loading, setLoading] = useState(true);
+  const [inviting, setInviting] = useState(false);
+  const [successEmail, setSuccessEmail] = useState("");
 
   async function fetchTeam() {
     setLoading(true);
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("merchant_users")
       .select("*")
-      .eq("merchant_id", merchantId);
+      .eq("merchant_id", merchantId)
+      .order("created_at", { ascending: false });
+    if (error) console.error("fetchTeam error:", error);
     setTeam(data || []);
     setLoading(false);
   }
@@ -345,17 +351,23 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
   }, [merchantId]);
 
   async function invite() {
-    if (!email || !phone) return;
-    await supabase.from("merchant_users").insert({
-      merchant_id: merchantId,
-      invited_email: email,
-      contact_number: phone,
-      role,
-      status: "invited",
+    if (!email || !phone || inviting) return;
+    setInviting(true);
+    setSuccessEmail("");
+    const { data: { user } } = await supabase.auth.getUser();
+    const businessName = user?.user_metadata?.business_name || "SupplyLah";
+    const res = await fetch(`${BACKEND_URL}/api/team/invite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ merchant_id: merchantId, email, phone, role, business_name: businessName }),
     });
-    setEmail("");
-    setPhone("");
-    fetchTeam();
+    if (res.ok) {
+      setSuccessEmail(email);
+      setEmail("");
+      setPhone("");
+      await fetchTeam();
+    }
+    setInviting(false);
   }
 
   if (loading) return <TabSkeleton rows={3} cols={5} />;
@@ -391,12 +403,20 @@ function TeamAdminTab({ merchantId }: { merchantId: string }) {
           </select>
           <button
             onClick={invite}
-            disabled={!email || !phone}
-            className="btn-primary px-6 py-2.5 font-bold whitespace-nowrap disabled:opacity-50"
+            disabled={!email || !phone || inviting}
+            className="btn-primary px-6 py-2.5 font-bold whitespace-nowrap disabled:opacity-50 min-w-[110px]"
           >
-            Invite →
+            {inviting ? "Sending…" : "Invite →"}
           </button>
         </div>
+        {successEmail && (
+          <div className="mt-3 flex items-center gap-2.5 px-4 py-3 bg-teal-50 border border-teal-200 rounded-xl">
+            <span className="text-teal-600 text-lg">✓</span>
+            <p className="text-sm text-teal-800 font-medium">
+              Invite sent to <span className="font-bold">{successEmail}</span> — they'll receive an email and WhatsApp to set up their account.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
@@ -479,7 +499,7 @@ function StatRow({ label, value, accent }: { label: string; value: string; accen
   );
 }
 
-function BarRow({ label, value, max, pct, color = "bg-teal-500" }: { label: string; value: string; max?: number; pct: number; color?: string }) {
+function BarRow({ label, value, pct, color = "bg-teal-500" }: { label: string; value: string; pct: number; color?: string }) {
   return (
     <div className="py-2 border-b border-slate-50 last:border-0">
       <div className="flex justify-between items-baseline mb-1.5">
@@ -493,7 +513,7 @@ function BarRow({ label, value, max, pct, color = "bg-teal-500" }: { label: stri
   );
 }
 
-function AnalyticsDashboard({ orders, inventory }: { orders: Order[]; inventory: Product[] }) {
+function AnalyticsDashboard({ orders }: { orders: Order[]; inventory: Product[] }) {
   const now           = new Date();
   const todayStr      = now.toISOString().slice(0, 10);
   const weekAgo       = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
@@ -1558,8 +1578,8 @@ function DashboardSkeleton() {
           </div>
           {/* Bar chart */}
           <div className="flex items-end gap-1 h-16 pt-2">
-            {Array.from({ length: 7 }).map((_, i) => (
-              <Sk key={i} className="flex-1 rounded-t-sm" style={{ height: `${30 + Math.random() * 60}%` }} />
+            {[55, 80, 40, 90, 60, 75, 50].map((h, i) => (
+              <div key={i} className="flex-1 rounded-t-sm bg-slate-200 animate-pulse" style={{ height: `${h}%` }} />
             ))}
           </div>
         </div>
@@ -1628,6 +1648,7 @@ export default function Dashboard() {
   const [chatMode, setChatMode] = useState<"text" | "voice">("text");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
+  const [userRole, setUserRole] = useState<"owner" | "Warehouse Manager" | "Wholesale Supplier">("owner");
   const [aiLogs, setAiLogs] = useState<{ t: string; m: string }[]>([]);
   const [demoPhone, setDemoPhone] = useState("+60198765432");
   const [demoName,  setDemoName]  = useState("Demo Customer");
@@ -1667,6 +1688,7 @@ export default function Dashboard() {
           if (merchant.company_name)
             setProfile((p) => ({ ...p, businessName: merchant.company_name }));
           setMerchantId(merchant.merchant_id);
+          setUserRole("owner"); // owns this merchant account
 
           // Check if actually set up: metadata flag OR has products
           const flagDone = meta.onboarding_complete === true;
@@ -1680,6 +1702,28 @@ export default function Dashboard() {
             setOnboardingComplete(true);
           }
           return;
+        }
+
+        // Not an owner — check if they're a team member invited to someone's merchant
+        const { data: memberRow } = await supabase
+          .from("merchant_users")
+          .select("merchant_id, role")
+          .eq("auth_user_id", user.id)
+          .single();
+
+        if (memberRow?.merchant_id) {
+          const { data: ownerMerchant } = await supabase
+            .from("merchant")
+            .select("merchant_id, company_name")
+            .eq("merchant_id", memberRow.merchant_id)
+            .single();
+          if (ownerMerchant) {
+            setProfile((p) => ({ ...p, businessName: ownerMerchant.company_name || p.businessName }));
+            setMerchantId(ownerMerchant.merchant_id);
+            setUserRole(memberRow.role as "Warehouse Manager" | "Wholesale Supplier");
+            setOnboardingComplete(true);
+            return;
+          }
         }
 
         // Authenticated but no merchant row yet — show empty dashboard, not demo data
@@ -1862,6 +1906,7 @@ export default function Dashboard() {
           <ProfileMenu
             profile={profile}
             isAuthenticated={isAuthenticated}
+            userRole={userRole}
             onLogout={handleLogout}
             onSelectTab={(t) => setActiveTab(t)}
           />
@@ -1871,12 +1916,12 @@ export default function Dashboard() {
       {/* Tabs */}
       <div className="px-6 pt-4 flex gap-2 overflow-x-auto pb-2">
         {[
-          { id: "command", label: "🏗 Command Centre" },
-          { id: "inventory", label: "📦 Inventory" },
-          { id: "team", label: "👥 Team" },
-          { id: "settings", label: "⚙️ Settings" },
-          { id: "demo", label: "💬 Demo Chat" },
-        ].map(({ id, label }) => (
+          { id: "command",   label: "🏗 Command Centre", roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
+          { id: "inventory", label: "📦 Inventory",       roles: ["owner", "Warehouse Manager", "Wholesale Supplier"] },
+          { id: "team",      label: "👥 Team",            roles: ["owner"] },
+          { id: "settings",  label: "⚙️ Settings",        roles: ["owner"] },
+          { id: "demo",      label: "💬 Demo Chat",       roles: ["owner"] },
+        ].filter(({ roles }) => roles.includes(userRole)).map(({ id, label }) => (
           <button
             key={id}
             onClick={() => setActiveTab(id as any)}
