@@ -1909,6 +1909,7 @@ function DashboardSkeleton() {
 
 export default function Dashboard() {
   const router = useRouter();
+  const aiLogBottomRef = useRef<HTMLDivElement>(null);
 
   // merchantId is null until resolved — prevents early wrong fetch
   const [merchantId, setMerchantId] = useState<string | null>(null);
@@ -2081,25 +2082,43 @@ export default function Dashboard() {
     setLoading(false);
   }, []);
 
-  const handleManualAction = async (msg?: string, log?: string) => {
-    // 1. Instantly show the human's message in the Mock Chat window
-    if (msg) {
+  const handleManualAction = async (msg?: string, log?: string, logsArray?: any[]) => {
+    // Switch to demo tab so user sees the chat
+    setActiveTab("demo");
+
+    if (logsArray && logsArray.length > 0) {
+      // Show all previous messages instantly, then add new agent messages one by one
+      const allMessages: ChatMessage[] = logsArray
+        .filter((l: any) => l.content && l.content.trim())
+        .map((l: any) => ({
+          role: (l.sender_type === "buyer" ? "buyer" : "agent") as "buyer" | "agent",
+          text: l.content,
+          time: new Date(l.created_at).toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" }),
+        }));
+
+      // Find where the new agent messages start (after the last buyer message or last message before resolve)
+      // Show everything up to and including the last buyer message immediately
+      const lastBuyerIdx = [...allMessages].map((m, i) => m.role === "buyer" ? i : -1).filter(i => i >= 0).pop() ?? allMessages.length - 1;
+      const existing = allMessages.slice(0, lastBuyerIdx + 1);
+      const newAgentMsgs = allMessages.slice(lastBuyerIdx + 1);
+
+      setChatMessages(existing);
+      addLog("─────────────────────────────────");
+      addLog("👤 [Human Review] Agent resolved order — resuming pipeline...");
+
+      // Show new agent messages one by one with delay
+      for (const m of newAgentMsgs) {
+        await new Promise(r => setTimeout(r, 700));
+        setChatMessages(prev => [...prev, m]);
+        addLog(`📤 [Agent] ${m.text.slice(0, 60)}${m.text.length > 60 ? "…" : ""}`);
+      }
+    } else if (msg) {
       const now = new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
-      setChatMessages((prev) =>[...prev, { role: "agent", text: msg, time: now }]);
+      setChatMessages(prev => [...prev, { role: "agent", text: msg, time: now }]);
     }
-    // 2. Instantly show the action in the AI reasoning panel
-    if (log) {
-      addLog(log);
-    }
-    // 3. Refresh the Kanban board
+    if (log) addLog(log);
     if (merchantId) await fetchData(merchantId);
   };
-
-  const handleClearChat = useCallback(() => {
-    // We'll let MockChat define the "Initial Message" or just set to empty
-    setChatMessages([]);
-    setVoiceFile("order.m4a");
-  }, []);
 
   /* Only start fetching once merchantId is resolved */
   useEffect(() => {
@@ -2142,9 +2161,13 @@ export default function Dashboard() {
   };
 
   const clearAiLogs = useCallback(() => {
-    // Memoize clearAiLogs
     setAiLogs([]);
   }, []);
+
+  // Auto-scroll AI reasoning panel when new logs arrive
+  useEffect(() => {
+    aiLogBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [aiLogs]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -2259,7 +2282,7 @@ export default function Dashboard() {
           .map(({ id, label }) => (
             <button
               key={id}
-              onClick={() => setActiveTab(id as any)}
+              onClick={() => { setActiveTab(id as any); if (id === "command" && merchantId) fetchData(merchantId); }}
               className={`text-sm font-semibold px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
                 activeTab === id
                   ? "bg-teal-700 text-white shadow-sm"
@@ -2595,6 +2618,7 @@ export default function Dashboard() {
                       );
                     })
                   )}
+                  <div ref={aiLogBottomRef} />
                 </div>
               </div>
             </div>

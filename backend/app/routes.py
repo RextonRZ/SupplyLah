@@ -246,43 +246,72 @@ async def resolve_order(payload: ResolveOrderRequest):
     # 4. Notify the Buyer (Resume Pipeline message)
     if payload.status == "Awaiting Confirmation":
         msg = (
-            "✅ Ejen kami telah menyemak maklumat anda. Sila balas *YA* untuk sahkan jumlah baru RM" f"{payload.amount:.2f} ini. 😊" if lang == "ms"
-            else "✅ Our agent has reviewed your info. Please reply *YES* to confirm this new total of RM" f"{payload.amount:.2f}. 😊"
+            "✅ Ejen kami telah menyemak maklumat anda." if lang == "ms"
+            else "✅ Our agent has reviewed your info."
         )
+        
+        await supabase_service.log_message(
+            customer_id=order['customer_id'],
+            order_id=payload.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg
+        )
+        
+        # Block and run inventory and quote (so frontend says 'loading...')
+        try:
+            from app.agents.orchestrator import resume_pipeline_after_manual_review
+            from app.models.schemas import CustomerRow
+            
+            customer_data = order.get('customer', {})
+            customer_row = CustomerRow(
+                customer_id=customer_data.get('customer_id', ''),
+                customer_name=customer_data.get('customer_name') or '',
+                whatsapp_number=customer_data.get('whatsapp_number', ''),
+                delivery_address=customer_data.get('delivery_address'),
+                merchant_id=order.get('merchant_id', ''),
+            )
+            await resume_pipeline_after_manual_review(
+                payload.order_id, 
+                payload.notes, 
+                lang, 
+                order['merchant_id'], 
+                customer_row
+            )
+        except Exception as e:
+            logger.error(f"Failed to start pipeline resume: {e}", exc_info=True)
+            
     elif payload.status == "Confirmed":
         msg = (
             "✅ Pesanan anda telah disahkan secara manual. Kami akan atur penghantaran segera! 🚚" if lang == "ms"
             else "✅ Your order has been manually confirmed. We are arranging delivery now! 🚚"
         )
+        await supabase_service.log_message(customer_id=order['customer_id'], order_id=payload.order_id, sender_type="agent", message_type="text", content=msg)
     else:
         msg = (
             "Ejen kami telah mengemaskini maklumat pesanan anda. 🙏" if lang == "ms"
             else "Our agent has updated your order details. 🙏"
         )
+        await supabase_service.log_message(customer_id=order['customer_id'], order_id=payload.order_id, sender_type="agent", message_type="text", content=msg)
 
     await twilio_service.send_whatsapp_message(customer_phone, msg)
     
     emit_message(msg) 
     emit(f"👤 [Human Intervention] Order #{payload.order_id[:8]} resolved manually.")
     
-    # 5. Log the intervention
-    log_entry = f"📝 [Manual Review] Resolved. Status: {payload.status}. New Amount: RM{payload.amount:.2f}"
-    if payload.amount < 50:
-        log_entry += " (⚠️ Threshold Bypassed)"
-    
-    await supabase_service.log_message(
-        customer_id=order['customer_id'],
-        order_id=payload.order_id,
-        sender_type="agent",
-        message_type="text",
-        content=log_entry
-    )
+    # Fetch refreshed logs AFTER pipeline completes
+    import asyncio as _asyncio
+    await _asyncio.sleep(0.5)  # brief wait for DB writes to settle
+    from app.services.supabase_service import get_supabase
+    logs_res = get_supabase().table("conversation_log").select("*").eq("customer_id", order['customer_id']).order("created_at", desc=False).limit(100).execute()
+    updated_logs = logs_res.data or []
 
     return {
-        "success": True, 
-        "order_id": payload.order_id, 
-        "message": msg, 
-        "log": log_entry
+        "success": True,
+        "order_id": payload.order_id,
+        "message": None,
+        "log": None,
+        "updated_logs": updated_logs
     }
 
 @dashboard_router.patch("/orders/{order_id}/override")

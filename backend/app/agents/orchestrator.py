@@ -1585,3 +1585,141 @@ async def handle_incoming_message(
         collector.append(final)
 
     return final
+
+
+# ─────────────────────────────────────────
+# Manual Review Resumption
+# ─────────────────────────────────────────
+
+async def resume_pipeline_after_manual_review(
+    order_id: str,
+    notes_json: str,
+    lang: str,
+    merchant_id: str,
+    customer: CustomerRow,
+) -> str:
+    from app.services.log_stream import emit, emit_message
+    try:
+        import traceback
+        import json as _json
+        from app.models.schemas import IntakeResult, OrderLineItem
+        
+        data = {}
+        try:
+            data = _json.loads(notes_json)
+        except Exception:
+            pass
+            
+        items_data = []
+        if "inventory_result" in data and "items" in data["inventory_result"]:
+            items_data = data["inventory_result"]["items"]
+        elif "previous_items" in data:
+            items_data = data["previous_items"]
+        elif "intake_result" in data and "items" in data["intake_result"]:
+            items_data = data["intake_result"]["items"]
+        elif "items" in data:
+            items_data = data["items"]
+            
+        # Rebuild items list for inventory
+        order_items = []
+        for it in items_data:
+            qty = it.get("fulfilled_qty") or it.get("quantity") or 1
+            name = it.get("product_name") or "Unknown"
+            unit = it.get("unit")
+            order_items.append(OrderLineItem(product_name=name, quantity=qty, unit=unit))
+            
+        intake = IntakeResult(
+            intent="order",
+            items=order_items,
+            language_detected=lang,
+            confidence=0.99,
+            delivery_address=data.get("delivery_address") or customer.delivery_address or ""
+        )
+        
+        # Notify customer we're checking stock
+        ack_stock_msg = _ack_checking_stock(lang, intake.items)
+        await _send_intermediate(customer, ack_stock_msg)
+        emit(f"📦 [InventoryAgent] Manual Resume - Checking stock for {len(intake.items)} item(s)...")
+
+        # Run Inventory Agent
+        inventory = await run_inventory_agent(intake, merchant_id, lang)
+
+        if not inventory.order_feasible or not inventory.items:
+            fallback = inventory.quote_message or (
+                "Maaf, kami tidak dapat memproses pesanan ini sekarang." if lang == "ms" else
+                "Sorry, we couldn't process this order right now."
+            )
+            await supabase_service.update_order_status(order_id, OrderStatus.EXPIRED)
+            await supabase_service.log_message(
+                customer_id=customer.customer_id, sender_type="agent", message_type="text", content=fallback,
+            )
+            emit_message(fallback)
+            return fallback
+
+        # Handle substitution if needed
+        sub_items = [i for i in inventory.items if i.is_substituted]
+        if sub_items:
+            await supabase_service.update_order_status(
+                order_id,
+                OrderStatus.AWAITING_SUBSTITUTION,
+                order_notes=_json.dumps({
+                    "inventory_result": inventory.model_dump(),
+                    "intake_result": intake.model_dump(),
+                    "delivery_address": intake.delivery_address,
+                    "language": lang,
+                }),
+            )
+            question = _build_substitution_question(lang, sub_items)
+            await supabase_service.log_message(
+                customer_id=customer.customer_id, order_id=order_id,
+                sender_type="agent", message_type="text", content=question,
+            )
+            emit_message(question)
+            return question
+
+        # No substitutions — persist order in Awaiting Confirmation state directly
+        await supabase_service.create_order_items(
+            order_id,
+            [
+                {
+                    "product_id": item.product_id,
+                    "product_name": item.product_name,
+                    "quantity": item.fulfilled_qty,
+                    "unit_price": item.unit_price,
+                    "is_substituted": item.is_substituted,
+                }
+                for item in inventory.items
+            ],
+        )
+
+        await supabase_service.update_order_status(
+            order_id,
+            OrderStatus.AWAITING_CONFIRMATION,
+            order_notes=_json.dumps({
+                "inventory_result": inventory.model_dump(),
+                "intake_result": intake.model_dump(),
+                "delivery_address": intake.delivery_address,
+                "language": lang,
+            }),
+            order_amount=inventory.grand_total,
+            confidence_score=1.0,
+        )
+
+        quote_msg = _build_quote_message(lang, inventory)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id, order_id=order_id,
+            sender_type="agent", message_type="text", content=quote_msg,
+        )
+        emit_message(quote_msg)
+        emit(f"✅ [DB] Order {order_id[:8]}... manual resume complete — Awaiting Confirmation")
+        
+        return quote_msg
+
+    except Exception as exc:
+        import traceback
+        err_msg = f"❌ [Error in Resume Pipeline] {str(exc)}\n{traceback.format_exc()}"
+        emit(err_msg)
+        emit_message(err_msg)
+        import logging
+        logging.getLogger(__name__).error(err_msg)
+        return ""

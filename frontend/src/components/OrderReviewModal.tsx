@@ -16,7 +16,9 @@ export default function OrderReviewModal({
   const [logs, setLogs] = useState<any[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
   const [amount, setAmount] = useState(order.order_amount || 0);
-  const [status, setStatus] = useState(order.order_status);
+  const [status, setStatus] = useState(
+    order.order_status === "Pending" ? "Awaiting Confirmation" : order.order_status
+  );
   const [notes, setNotes] = useState(order.order_notes || "{}");
   const [isSaving, setIsSaving] = useState(false);
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -82,7 +84,8 @@ export default function OrderReviewModal({
       const data = await response.json()
 
       if (response.ok) {
-        onSave(data.message, data.log);
+        // Use updated_logs from backend (captured after pipeline completes)
+        onSave(data.message, data.log, data.updated_logs || logs);
         onClose();
       }
     } catch (err) {
@@ -93,35 +96,35 @@ export default function OrderReviewModal({
   };
 
   const calculateTotalFromJson = (jsonString: string) => {
-  try {
-    const data = JSON.parse(jsonString);
-    let items = [];
-    let discount = 0;
-    let delivery = 0;
+    try {
+      const data = JSON.parse(jsonString);
+      let items = [];
+      let discount = 0;
+      let delivery = 0;
 
-    if (data.inventory_result) {
-      items = data.inventory_result.items || [];
-      discount = parseFloat(data.inventory_result.discount_applied || 0);
-      delivery = parseFloat(data.inventory_result.delivery_fee || 0);
-    } else if (data.previous_items) {
-      items = data.previous_items;
-    } else {
+      if (data.inventory_result) {
+        items = data.inventory_result.items || [];
+        discount = parseFloat(data.inventory_result.discount_applied || 0);
+        delivery = parseFloat(data.inventory_result.delivery_fee || 0);
+      } else if (data.previous_items) {
+        items = data.previous_items;
+      } else {
+        return null;
+      }
+
+      const subtotal = items.reduce((sum: number, item: any) => {
+        const qty = item.fulfilled_qty ?? item.quantity ?? 0;
+        const price = item.unit_price ?? 0;
+        return sum + (price * qty);
+      }, 0);
+
+      const grandTotal = subtotal - discount + delivery;
+
+      return { subtotal, discount, delivery, grandTotal };
+    } catch (e) {
       return null;
     }
-
-    const subtotal = items.reduce((sum: number, item: any) => {
-      const qty = item.fulfilled_qty ?? item.quantity ?? 0;
-      const price = item.unit_price ?? 0;
-      return sum + (price * qty);
-    }, 0);
-
-    const grandTotal = subtotal - discount + delivery;
-
-    return { subtotal, discount, delivery, grandTotal };
-  } catch (e) {
-    return null;
-  }
-};
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
@@ -169,11 +172,10 @@ export default function OrderReviewModal({
                       {new Date(log.created_at).toLocaleTimeString()}
                     </span>
                     <div
-                      className={`px-3 py-2 rounded-2xl text-sm max-w-[90%] ${
-                        log.sender_type === "buyer"
+                      className={`px-3 py-2 rounded-2xl text-sm max-w-[90%] ${log.sender_type === "buyer"
                           ? "bg-white border border-slate-200 text-slate-700 rounded-tl-none"
                           : "bg-teal-600 text-white rounded-tr-none"
-                      }`}
+                        }`}
                     >
                       {log.content}
                     </div>
@@ -295,7 +297,7 @@ export default function OrderReviewModal({
           </button>
           <button
             onClick={handleSave}
-            disabled={isSaving || !!jsonError || amount < 0 || (isBelowMin && !bypassMinOrder) }
+            disabled={isSaving || !!jsonError || amount < 0 || (isBelowMin && !bypassMinOrder)}
             className="bg-teal-600 hover:bg-teal-700 text-white px-8 py-2 rounded-xl text-sm font-bold shadow-lg disabled:opacity-30 disabled:grayscale transition-all"
           >
             {isSaving ? "Saving..." : "Resolve & Save Order"}

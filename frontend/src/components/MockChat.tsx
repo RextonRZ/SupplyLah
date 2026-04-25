@@ -37,7 +37,7 @@ const getInitialMessages = (
 };
 
 const MALAY_WORDS =
-  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tidak|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan)\b/i;
+  /\b(nak|nk|boleh|jap|saya|ni|tu|ke|dan|dengan|untuk|minyak|beras|ayam|bawang|hantar|kirim|harga|berapa|lagi|dah|tak|guna|boss|lah|la|ya|tidak|tolong|ekor|biji|sahaja|je|tahu|tau|maaf|terima|kasih|taman|jalan|sikit|tambah)\b/i;
 const EN_WORDS =
   /\b(please|want|need|send|deliver|thank|hello|hi|yes|no|cancel|confirm|address|price|how|order|i|can|know|what|is|the|for|and|are|we|do|have|stock|remaining|left)\b/i;
 
