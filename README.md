@@ -1,6 +1,5 @@
 # SupplyLah
-
-> **From Chat. To Chain.**
+**From Chat. To Chain.**
 
 ## 🎬 Video Pitch
 [![Watch the Pitch](https://img.shields.io/badge/Watch-Video%20Pitch-red?style=for-the-badge&logo=google-drive)](https://drive.google.com/file/d/1Io4of-N1gpotvdlsG-dt2R2u7Th_677c/view?usp=sharing)
