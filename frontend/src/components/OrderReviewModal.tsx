@@ -253,7 +253,7 @@ export default function OrderReviewModal({
               </label>
               <select
                 value={status}
-                onChange={(e) => setStatus(e.target.value)}
+                onChange={(e) => setStatus(e.target.value as typeof status)}
                 className="w-full px-4 py-2 border border-slate-200 rounded-xl outline-none"
               >
                 <option value="Pending">Pending</option>
