@@ -11,7 +11,7 @@ export default function OrderReviewModal({
 }: {
   order: Order;
   onClose: () => void;
-  onSave: (msg?: string, log?: string) => void;
+  onSave: (msg?: string, log?: string, logsArray?: any[]) => void;
 }) {
   const [logs, setLogs] = useState<any[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(true);
@@ -173,8 +173,8 @@ export default function OrderReviewModal({
                     </span>
                     <div
                       className={`px-3 py-2 rounded-2xl text-sm max-w-[90%] ${log.sender_type === "buyer"
-                          ? "bg-white border border-slate-200 text-slate-700 rounded-tl-none"
-                          : "bg-teal-600 text-white rounded-tr-none"
+                        ? "bg-white border border-slate-200 text-slate-700 rounded-tl-none"
+                        : "bg-teal-600 text-white rounded-tr-none"
                         }`}
                     >
                       {log.content}
