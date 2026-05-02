@@ -123,7 +123,7 @@ async def describe_image(image_path_or_url: str, prompt: str) -> str:
     settings = get_settings()
     client = get_glm_client()
 
-    if image_path_or_url.startswith("http"):
+    if image_path_or_url.startswith("http") or image_path_or_url.startswith("data:"):
         image_block: dict = {
             "type": "image_url",
             "image_url": {"url": image_path_or_url},

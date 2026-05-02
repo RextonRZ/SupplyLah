@@ -220,6 +220,8 @@ async def mock_chat(
             text_content=text_content,
             media_url=media_url,
             merchant_id=payload.merchant_id or settings.default_merchant_id,
+            media_content=payload.media_content,
+            media_content_type=payload.media_content_type,
         )
     except Exception as exc:
         logger.error("Mock chat error: %s", exc, exc_info=True)

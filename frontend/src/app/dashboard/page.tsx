@@ -10,6 +10,8 @@ import AlertsPanel from "@/components/AlertsPanel";
 import InventoryPanel from "@/components/InventoryPanel";
 import MockChat, { ChatMessage } from "@/components/MockChat";
 import OrderReviewModal from "@/components/OrderReviewModal";
+import * as XLSX from "xlsx";
+import Papa from "papaparse";
 
 const DEMO_MERCHANT_ID =
   process.env.NEXT_PUBLIC_MERCHANT_ID || "00000000-0000-0000-0000-000000000001";
@@ -1402,6 +1404,12 @@ function InventoryAdminTab({
   userRole: "owner" | "Warehouse Manager" | "Wholesale Supplier";
 }) {
   const [adding, setAdding] = useState(false);
+  const [invSearch, setInvSearch] = useState("");
+  const invFileRef = useRef<HTMLInputElement>(null);
+  const [sheetsUrl, setSheetsUrl] = useState("");
+  const [sheetsOpen, setSheetsOpen] = useState(false);
+  const [sheetsImporting, setSheetsImporting] = useState(false);
+  const [sheetsError, setSheetsError] = useState<string | null>(null);
   const [newRow, setNewRow] = useState({
     product_id: "",
     product_name: "",
@@ -1453,6 +1461,99 @@ function InventoryAdminTab({
     onRefresh();
   }
 
+  function handleInventoryFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (!["csv", "xlsx", "xls"].includes(ext ?? "")) return;
+
+    const processData = async (data: Record<string, any>[]) => {
+      const rows = data
+        .map((row) => {
+          const vals = Object.values(row);
+          const name = String(row["product_name"] ?? vals[1] ?? "").trim();
+          if (!name) return null;
+          return {
+            merchant_id: merchantId,
+            product_name: name,
+            product_sku: String(row["product_id"] ?? vals[0] ?? "").trim() || null,
+            unit: String(row["unit"] ?? vals[2] ?? "").trim() || null,
+            stock_quantity: parseInt(String(row["available_quantity"] ?? vals[3] ?? "0")) || 0,
+            reorder_threshold: parseInt(String(row["reorder_threshold"] ?? vals[4] ?? "0")) || 0,
+            unit_price: parseFloat(String(row["unit_price"] ?? vals[5] ?? "0")) || 0,
+            slang_aliases: [],
+          };
+        })
+        .filter(Boolean);
+
+      if (rows.length === 0) return;
+      await supabase.from("product").insert(rows);
+      setRefreshing(true);
+      onRefresh();
+    };
+
+    if (ext === "csv") {
+      Papa.parse(file, { header: true, skipEmptyLines: true, complete: (r) => processData(r.data as Record<string, any>[]) });
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const wb = XLSX.read(new Uint8Array(ev.target?.result as ArrayBuffer), { type: "array" });
+        processData(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) as Record<string, any>[]);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  }
+
+  async function handleGoogleSheet() {
+    if (!sheetsUrl.trim()) return;
+    setSheetsImporting(true);
+    setSheetsError(null);
+    try {
+      const idMatch = sheetsUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (!idMatch) throw new Error("Invalid Google Sheets URL. Copy the full URL from your browser.");
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv`;
+      const res = await fetch(csvUrl);
+      if (!res.ok) throw new Error("Could not read sheet. Make sure it's shared as 'Anyone with the link can view'.");
+      const csvText = await res.text();
+      await new Promise<void>((resolve) =>
+        Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: true,
+          complete: async (results) => {
+            const rows = (results.data as Record<string, any>[]).map((row) => {
+              const vals = Object.values(row);
+              const name = String(row["product_name"] ?? vals[1] ?? "").trim();
+              if (!name) return null;
+              return {
+                merchant_id: merchantId,
+                product_name: name,
+                product_sku: String(row["product_id"] ?? vals[0] ?? "").trim() || null,
+                unit: String(row["unit"] ?? vals[2] ?? "").trim() || null,
+                stock_quantity: parseInt(String(row["available_quantity"] ?? vals[3] ?? "0")) || 0,
+                reorder_threshold: parseInt(String(row["reorder_threshold"] ?? vals[4] ?? "0")) || 0,
+                unit_price: parseFloat(String(row["unit_price"] ?? vals[5] ?? "0")) || 0,
+                slang_aliases: [],
+              };
+            }).filter(Boolean);
+            if (rows.length === 0) { setSheetsError("No valid rows found. Check your column headers."); resolve(); return; }
+            await supabase.from("product").insert(rows);
+            setSheetsUrl("");
+            setSheetsOpen(false);
+            setRefreshing(true);
+            onRefresh();
+            resolve();
+          },
+        })
+      );
+    } catch (err: any) {
+      setSheetsError(err.message || "Failed to import.");
+    } finally {
+      setSheetsImporting(false);
+    }
+  }
+
   function startEdit(p: Product) {
     setEditingId(p.product_id);
     setEditRow({
@@ -1494,26 +1595,73 @@ function InventoryAdminTab({
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
+      <input ref={invFileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleInventoryFile} />
+
+      <div className="flex items-center gap-3 flex-wrap">
         <h2 className="text-xl font-bold text-slate-900">Manage Inventory</h2>
         {isViewOnly && (
           <span className="bg-slate-100 text-slate-600 text-xs px-2.5 py-1 rounded-full font-semibold border border-slate-200">
             View Only
           </span>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
           {!isViewOnly && (
-            <button
-              onClick={() => {
-                setAdding(!adding);
-                setEditingId(null);
-              }}
-              className="btn-primary px-5 py-2 text-sm font-bold"
-            >
-              {adding ? "Cancel" : "+ Add new product"}
-            </button>
+            <>
+              <button
+                onClick={() => { setSheetsOpen(!sheetsOpen); setSheetsError(null); }}
+                className="px-5 py-2.5 text-sm font-semibold rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors whitespace-nowrap"
+              >
+                Google Sheets
+              </button>
+              <button
+                onClick={() => invFileRef.current?.click()}
+                className="px-5 py-2.5 text-sm font-semibold rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50 transition-colors whitespace-nowrap"
+              >
+                CSV / Excel
+              </button>
+              <button
+                onClick={() => { setAdding(!adding); setEditingId(null); }}
+                className="btn-primary px-5 py-2 text-sm font-bold whitespace-nowrap"
+              >
+                {adding ? "Cancel" : "+ Add new product"}
+              </button>
+            </>
           )}
         </div>
+      </div>
+
+      {sheetsOpen && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
+          <p className="text-xs font-semibold text-slate-500">Paste your Google Sheets URL — sheet must be shared as <em>Anyone with the link can view</em></p>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={sheetsUrl}
+              onChange={(e) => setSheetsUrl(e.target.value)}
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-teal-400 bg-white"
+            />
+            <button
+              onClick={handleGoogleSheet}
+              disabled={!sheetsUrl.trim() || sheetsImporting}
+              className="btn-primary px-5 py-2 text-sm font-bold disabled:opacity-40"
+            >
+              {sheetsImporting ? "Importing…" : "Import"}
+            </button>
+          </div>
+          {sheetsError && <p className="text-xs text-red-500">{sheetsError}</p>}
+        </div>
+      )}
+
+      <div className="relative">
+        <input
+          type="text"
+          value={invSearch}
+          onChange={(e) => setInvSearch(e.target.value)}
+          placeholder="Search products…"
+          className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:border-teal-400 bg-white"
+        />
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       </div>
 
       {adding && (
@@ -1588,7 +1736,10 @@ function InventoryAdminTab({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {inventory.map((p) => {
+            {inventory.filter(p =>
+              !invSearch || p.product_name.toLowerCase().includes(invSearch.toLowerCase()) ||
+              (p.product_sku ?? "").toLowerCase().includes(invSearch.toLowerCase())
+            ).map((p) => {
               const isEditing = editingId === p.product_id;
               return (
                 <tr
@@ -1928,7 +2079,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<
     "command" | "demo" | "inventory" | "team" | "settings"
   >("command");
-  const [chatMode, setChatMode] = useState<"text" | "voice">("text");
+  const [chatMode, setChatMode] = useState<"text" | "voice" | "image">("text");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
   const [userRole, setUserRole] = useState<
@@ -2110,7 +2261,7 @@ export default function Dashboard() {
       for (const m of newAgentMsgs) {
         await new Promise(r => setTimeout(r, 700));
         setChatMessages(prev => [...prev, m]);
-        addLog(`📤 [Agent] ${m.text.slice(0, 60)}${m.text.length > 60 ? "…" : ""}`);
+        addLog(`📤 [Agent] ${(m.text ?? "").slice(0, 60)}${(m.text ?? "").length > 60 ? "…" : ""}`);
       }
     } else if (msg) {
       const now = new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
@@ -2518,13 +2669,16 @@ export default function Dashboard() {
                     <span>💬</span> Text Buyer
                   </button>
                   <button
-                    onClick={() => {
-                      setChatMode("voice");
-                      // setDemoChatKey((k) => k + 1);
-                    }}
+                    onClick={() => setChatMode("voice")}
                     className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors ${chatMode === "voice" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
                   >
                     <span>🎙️</span> Voice Buyer
+                  </button>
+                  <button
+                    onClick={() => setChatMode("image")}
+                    className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors ${chatMode === "image" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
+                  >
+                    <span>🖼️</span> Image Buyer
                   </button>
                 </div>
 

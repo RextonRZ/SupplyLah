@@ -27,6 +27,13 @@ def embed_text(text: str) -> list[float]:
     return embedding.tolist()
 
 
+async def embed_text_async(text: str) -> list[float]:
+    """Non-blocking version — runs embed_text in a thread pool so the event loop stays free."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, embed_text, text)
+
+
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Return normalised embeddings for a batch of texts (more efficient than looping)."""
     model = _get_model()

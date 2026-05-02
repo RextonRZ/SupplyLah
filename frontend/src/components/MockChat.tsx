@@ -7,8 +7,10 @@ export interface ChatMessage {
   role: "buyer" | "agent";
   text?: string;
   audioUrl?: string;
+  imageDataUrl?: string;
   time: string;
   isAudio?: boolean;
+  isImage?: boolean;
   recordingDuration?: number;
 }
 
@@ -18,19 +20,18 @@ const DEMO_MERCHANT = "00000000-0000-0000-0000-000000000001";
 
 // Helper function to get initial messages
 const getInitialMessages = (
-  chatMode: "text" | "voice",
+  chatMode: "text" | "voice" | "image",
   now: () => string,
 ): ChatMessage[] => {
-  const commonWelcome = `👋 Demo WhatsApp — ${chatMode === "text" ? "Text Mode" : "Voice Note Mode"}.`;
-  const textSpecific =
-    'Type an order: "boss nak 3 botol minyak masak n 2 bag beras, hantar ke Jalan Ampang KL"';
-  const voiceSpecific =
-    'Hold the mic to record your order. Try: "boss nak 5 kg ayam."';
-
+  const hints: Record<string, string> = {
+    text: 'Type an order: "boss nak 3 botol minyak masak n 2 bag beras, hantar ke Jalan Ampang KL"',
+    voice: 'Hold the mic to record your order. Try: "boss nak 5 kg ayam."',
+    image: "Tap 📎 to attach a photo of a handwritten order list, or type your order below.",
+  };
   return [
     {
       role: "agent",
-      text: `${commonWelcome}\n\n${chatMode === "text" ? textSpecific : voiceSpecific}`,
+      text: `👋 Demo WhatsApp — ${chatMode === "text" ? "Text" : chatMode === "voice" ? "Voice Note" : "Image"} Mode.\n\n${hints[chatMode]}`,
       time: now(),
     },
   ];
@@ -63,15 +64,36 @@ function logToHint(log: string): string | null {
 }
 
 
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+
 function WhatsAppText({ text }: { text: string }) {
   function parseLine(line: string): React.ReactNode {
-    const segments = line.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
-    return segments.map((seg, i) => {
-      if (seg.startsWith("*") && seg.endsWith("*") && seg.length > 2)
-        return <strong key={i} className="font-semibold">{seg.slice(1, -1)}</strong>;
-      if (seg.startsWith("_") && seg.endsWith("_") && seg.length > 2)
-        return <em key={i}>{seg.slice(1, -1)}</em>;
-      return <span key={i}>{seg}</span>;
+    // Split on URLs first, then on bold/italic markers
+    const urlParts = line.split(URL_RE);
+    return urlParts.map((part, ui) => {
+      if (URL_RE.test(part)) {
+        URL_RE.lastIndex = 0;
+        return (
+          <a
+            key={ui}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 underline underline-offset-2 break-all hover:text-blue-800 active:text-blue-900"
+          >
+            {part}
+          </a>
+        );
+      }
+      URL_RE.lastIndex = 0;
+      const segments = part.split(/(\*[^*\n]+\*|_[^_\n]+_)/g);
+      return segments.map((seg, i) => {
+        if (seg.startsWith("*") && seg.endsWith("*") && seg.length > 2)
+          return <strong key={`${ui}-${i}`} className="font-semibold">{seg.slice(1, -1)}</strong>;
+        if (seg.startsWith("_") && seg.endsWith("_") && seg.length > 2)
+          return <em key={`${ui}-${i}`}>{seg.slice(1, -1)}</em>;
+        return <span key={`${ui}-${i}`}>{seg}</span>;
+      });
     });
   }
 
@@ -108,7 +130,7 @@ export default function MockChat({
   fromPhone?: string;
   fromName?: string;
   shopName?: string;
-  chatMode: "text" | "voice";
+  chatMode: "text" | "voice" | "image";
   onLog?: (message: string) => void;
   messages: ChatMessage[];
   setMessages: (msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
@@ -131,6 +153,7 @@ export default function MockChat({
   const clearHistory = () => {
     setMessages(getInitialMessages(chatMode, now));
     setVoiceFile("order.m4a");
+    setSelectedImage(null);
     onLog?.("🗑️ Chat history cleared by user.");
   };
 
@@ -145,9 +168,11 @@ export default function MockChat({
   const bottomRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const sseShown = useRef<Set<string>>(new Set());
   const nameSynced = useRef(false);
+  const [selectedImage, setSelectedImage] = useState<{ dataUrl: string; base64: string; type: string } | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -284,6 +309,91 @@ export default function MockChat({
     } catch {}
   }
 
+  function handleImagePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(",")[1];
+      setSelectedImage({ dataUrl, base64, type: file.type || "image/jpeg" });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  async function sendImageMessage() {
+    if (!selectedImage || loading) return;
+    const { dataUrl, base64, type } = selectedImage;
+    setSelectedImage(null);
+
+    const ack = "Ok! 🖼️ Tengah baca gambar pesanan tu, jap sekejap...";
+    setMessages((prev) => [
+      ...prev,
+      { role: "buyer", isImage: true, imageDataUrl: dataUrl, text: input.trim() || undefined, time: now() },
+      { role: "agent", text: ack, time: now() },
+    ]);
+    setInput("");
+    setLoading(true);
+    setChatHint("Reading your order image…");
+
+    onLog?.("─────────────────────────────────");
+    onLog?.("📨 Buyer: [Image — order list photo]");
+
+    const sessionId = crypto.randomUUID();
+    esRef.current?.close();
+    sseShown.current.clear();
+    sseShown.current.add(ack);
+    const es = new EventSource(`${BACKEND_URL}/api/session-logs/${sessionId}`);
+    esRef.current = es;
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "log") { onLog?.(data.message); const h = logToHint(data.message); if (h) setChatHint(h); }
+        if (data.type === "message") { if (sseShown.current.has(data.text)) return; sseShown.current.add(data.text); setMessages((prev) => [...prev, { role: "agent", text: data.text, time: now() }]); }
+        if (data.type === "done") es.close();
+      } catch {}
+    };
+    es.onerror = () => es.close();
+
+    await new Promise<void>((resolve) => { es.addEventListener("open", () => resolve(), { once: true }); setTimeout(resolve, 500); });
+
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${BACKEND_URL}/webhook/mock-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Session-Id": sessionId },
+        body: JSON.stringify({
+          from_number: phone,
+          message_type: "image",
+          text_content: input.trim() || null,
+          media_content: base64,
+          media_content_type: type,
+          merchant_id: resolvedMerchant,
+        }),
+      });
+      es.close();
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      const data = await res.json();
+      const allReplies: string[] = data.replies ?? [];
+      const replies = allReplies.filter((r) => !sseShown.current.has(r));
+      sseShown.current.clear();
+      onLog?.(`✅ [Pipeline] Response in ${elapsed}s — ${replies.length} message(s) to buyer`);
+      setLoading(false);
+      await syncNameToDb();
+      for (let i = 0; i < replies.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 650));
+        setMessages((prev) => [...prev, { role: "agent", text: replies[i], time: now() }]);
+      }
+    } catch {
+      es.close();
+      onLog?.("❌ [System] Image processing failed — is the backend running?");
+      setLoading(false);
+      setMessages((prev) => [...prev, { role: "agent", text: "⚠ Image processing failed.", time: now() }]);
+    }
+  }
+
   async function sendMessage() {
     if (!input.trim() || loading) return;
     const text = input.trim();
@@ -416,7 +526,7 @@ export default function MockChat({
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "buyer" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[85%] rounded-xl px-3 py-2 text-sm shadow-sm ${
+              className={`max-w-[85%] rounded-xl px-3 py-2 text-sm shadow-sm break-words overflow-hidden ${
                 m.role === "buyer"
                   ? "bg-[#dcf8c6] rounded-tr-none"
                   : "bg-white rounded-tl-none"
@@ -424,13 +534,16 @@ export default function MockChat({
             >
               {m.isAudio ? (
                 <div className="flex items-center gap-3 py-1 min-w-[160px]">
-                  <div className="w-8 h-8 rounded-full bg-slate-300 flex items-center justify-center text-white">
-                    ▶
-                  </div>
+                  <div className="w-8 h-8 rounded-full bg-slate-300 flex items-center justify-center text-white">▶</div>
                   <div className="flex-1 h-1 bg-slate-200 rounded-full relative">
                     <div className="absolute left-0 top-0 h-full w-1/3 bg-green-500 rounded-full" />
                   </div>
                   <span className="text-[10px] text-slate-500">0:{String(m.recordingDuration ?? 1).padStart(2, "0")}</span>
+                </div>
+              ) : m.isImage ? (
+                <div className="space-y-1">
+                  <img src={m.imageDataUrl} alt="order list" className="rounded-lg max-w-[200px] max-h-[200px] object-cover" />
+                  {m.text && <WhatsAppText text={m.text} />}
                 </div>
               ) : (
                 <WhatsAppText text={m.text ?? ""} />
@@ -458,9 +571,47 @@ export default function MockChat({
         <div ref={bottomRef} />
       </div>
 
+      {/* Hidden file input for image mode */}
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImagePick} />
+
       {/* Input */}
       <div className="border-t border-slate-200 bg-white px-3 pt-2 pb-5 flex items-end gap-2">
-        {chatMode === "text" ? (
+        {chatMode === "image" ? (
+          <>
+            {/* Image preview strip */}
+            {selectedImage && (
+              <div className="absolute bottom-20 left-3 right-3 bg-white border border-slate-200 rounded-xl p-2 flex items-center gap-2 shadow-md z-10">
+                <img src={selectedImage.dataUrl} alt="preview" className="w-14 h-14 rounded-lg object-cover" />
+                <div className="flex-1 text-xs text-slate-500 truncate">Image ready to send</div>
+                <button onClick={() => setSelectedImage(null)} className="text-slate-400 hover:text-red-500 text-lg leading-none">×</button>
+              </div>
+            )}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+              className="w-10 h-10 rounded-full bg-slate-100 border border-slate-300 text-slate-600 flex items-center justify-center hover:bg-slate-200 disabled:opacity-40 shrink-0 text-lg"
+              title="Attach image"
+            >
+              📎
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => { setInput(e.target.value); e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); selectedImage ? sendImageMessage() : sendMessage(); } }}
+              placeholder="Attach image or type order…"
+              rows={1}
+              className="flex-1 self-end resize-none rounded-2xl border border-slate-300 px-4 py-2 text-sm leading-5 focus:outline-none focus:border-green-400 max-h-[100px] overflow-y-auto"
+            />
+            <button
+              onClick={selectedImage ? sendImageMessage : sendMessage}
+              disabled={loading || (!selectedImage && !input.trim())}
+              className="w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center hover:bg-green-700 disabled:opacity-40 shrink-0"
+            >
+              ➤
+            </button>
+          </>
+        ) : chatMode === "text" ? (
           <>
             <textarea
               ref={textareaRef}

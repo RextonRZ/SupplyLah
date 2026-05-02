@@ -364,12 +364,44 @@ def _is_confirmation(text: str) -> Optional[bool]:
 # Modality pre-processing
 # ─────────────────────────────────────────
 
+_IMAGE_OCR_PROMPT = (
+    "This is a Malaysian SME wholesale order list — it may be handwritten, printed, or a photo of a whiteboard. "
+    "The language is Bahasa Melayu, English, or a mix (Bahasa Rojak). "
+    "Common abbreviations: 'ctn'=carton, 'kg'=kilogram, 'pkt'=packet, 'btl'=bottle, 'tin'=tin, 'guni'=sack, 'kotak'=box. "
+    "Extract EVERY item and its quantity. "
+    "Output format — one item per line: '<product name>: <quantity> <unit>'. "
+    "If quantity is unclear write '?'. Output ONLY the item list, no extra text."
+)
+
 async def _resolve_to_text(
     message_type: MessageType,
     text_content: Optional[str],
     media_url: Optional[str],
+    media_content: Optional[str] = None,
+    media_content_type: str = "image/jpeg",
 ) -> str:
     if message_type == MessageType.TEXT:
+        return text_content or ""
+
+    if message_type == MessageType.IMAGE:
+        # Mock-chat path: base64 image sent directly from frontend
+        if media_content:
+            data_uri = f"data:{media_content_type};base64,{media_content}"
+            emit("🖼️ [OCR] Extracting order items from image via Gemini Vision...")
+            extracted = await describe_image(data_uri, _IMAGE_OCR_PROMPT)
+            logger.info("Image OCR result (base64): %s", extracted[:200])
+            emit(f"✅ [OCR] Extracted: {extracted[:120]}{'…' if len(extracted) > 120 else ''}")
+            return extracted
+
+        # Real Twilio path: download from URL then upload to S3
+        if media_url:
+            media_bytes = await download_twilio_media(media_url)
+            s3_url = await upload_media(media_bytes, "image/jpeg", f"images/{hash(media_url)}.jpg")
+            emit("🖼️ [OCR] Extracting order items from image via Gemini Vision...")
+            extracted = await describe_image(s3_url, _IMAGE_OCR_PROMPT)
+            logger.info("Image OCR result: %s", extracted[:200])
+            return extracted
+
         return text_content or ""
 
     if not media_url:
@@ -378,33 +410,13 @@ async def _resolve_to_text(
     media_bytes = await download_twilio_media(media_url)
 
     if message_type == MessageType.AUDIO:
-        # 1. Upload to S3
         key = f"audio/{hash(media_url)}.ogg"
         await upload_media(media_bytes, "audio/ogg", key)
-        
-        # 2. Generate pre-signed URL for the transcription service
         presigned_url = await generate_presigned_url(key)
-        
-        # 3. Call Groq Whisper via our service
         result = await transcribe_audio_from_url(presigned_url, "audio/ogg")
         transcript = result["transcript"]
-        
         logger.info("Audio transcribed via Groq: %s", transcript[:100])
         return transcript
-    
-    if message_type == MessageType.IMAGE:
-        s3_url = await upload_media(media_bytes, "image/jpeg", f"images/{hash(media_url)}.jpg")
-        extracted = await describe_image(
-            s3_url,
-            prompt=(
-                "This is a handwritten or printed wholesale order list from Malaysia. "
-                "Extract ALL items with their quantities into plain text. "
-                "List format: '<product name>: <quantity> <unit>'. "
-                "Output ONLY the item list, one per line."
-            ),
-        )
-        logger.info("Image OCR result: %s", extracted[:200])
-        return extracted
 
     return text_content or ""
 
@@ -2032,6 +2044,8 @@ async def _handle_confirmation_reply(
 
     _collector = _msg_collector.get()
     if _collector is not None:
+        # Add ack to collector FIRST so the frontend shows it before the tracking message
+        _collector.append(ack)
         # Inline: mock-chat — run logistics now so result is in the response
         logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
         await supabase_service.log_message(
@@ -2074,6 +2088,8 @@ async def handle_incoming_message(
     text_content: Optional[str],
     media_url: Optional[str],
     merchant_id: str,
+    media_content: Optional[str] = None,
+    media_content_type: str = "image/jpeg",
 ) -> str:
     ensure_inventory_worker()
 
@@ -2124,7 +2140,7 @@ async def handle_incoming_message(
                         if o and o.requires_human_review), None)
 
     # Resolve the message text early so we can inspect it for routing decisions
-    raw_text = await _resolve_to_text(message_type, text_content, media_url)
+    raw_text = await _resolve_to_text(message_type, text_content, media_url, media_content, media_content_type)
     
     if review_order:
         emit(f"📋 [State] Order {review_order.order_id[:8]} is flagged for review — blocking AI.")

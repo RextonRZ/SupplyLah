@@ -1,6 +1,7 @@
 """Intake Agent — GLM-5.1 powered order parser for multilingual WhatsApp messages."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -35,8 +36,10 @@ async def run_intake_agent(
 
     # Fetch catalog once; inject into context instead of tool-call round trips
     emit("📦 [IntakeAgent] Loading product catalogue from database...")
+    await asyncio.sleep(0)
     products = await supabase_service.get_products(merchant_id)
     emit(f"📦 [IntakeAgent] Catalogue loaded — {len(products)} products, aliases mapped")
+    await asyncio.sleep(0)
     catalog = json.dumps(
         [
             {
@@ -54,7 +57,8 @@ async def run_intake_agent(
     dynamic_examples_block = ""
     try:
         emit("🔍 [IntakeAgent] Retrieving similar few-shot examples via pgvector...")
-        query_embedding = embedding_service.embed_text(raw_message)
+        await asyncio.sleep(0)
+        query_embedding = await embedding_service.embed_text_async(raw_message)
         few_shot_hits = await supabase_service.retrieve_few_shot_examples(query_embedding, match_count=3)
         if few_shot_hits:
             lines = []
@@ -69,9 +73,11 @@ async def run_intake_agent(
                 + "\n\n".join(lines)
             )
             emit(f"✅ [IntakeAgent] Injecting {len(few_shot_hits)} dynamic few-shot examples:")
+            await asyncio.sleep(0)
             for i, hit in enumerate(few_shot_hits, 1):
                 similarity_pct = round(hit.get("similarity", 0) * 100, 1)
                 emit(f"   #{i} ({similarity_pct}% match): \"{hit['raw_message']}\"")
+                await asyncio.sleep(0)
     except Exception as exc:
         logger.warning("Few-shot retrieval failed, proceeding without: %s", exc)
 
@@ -91,6 +97,7 @@ async def run_intake_agent(
 
     try:
         emit(f"🤖 [IntakeAgent] Calling AI model ({settings.model_reasoning})...")
+        await asyncio.sleep(0)
         raw_output = await run_agent_loop(
             model=settings.model_reasoning,
             messages=messages,
@@ -107,6 +114,8 @@ async def run_intake_agent(
             raw_output = raw_output.strip("`").strip()
             if raw_output.startswith("json"):
                 raw_output = raw_output[4:].strip()
+        # Remove trailing commas before } or ] — common Gemini quirk
+        raw_output = _re.sub(r",\s*([}\]])", r"\1", raw_output)
 
         if not raw_output:
             raise json.JSONDecodeError("Empty response from model", "", 0)

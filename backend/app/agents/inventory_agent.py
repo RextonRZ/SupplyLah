@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+
 from pathlib import Path
 
 from app.config import get_settings
@@ -65,8 +66,10 @@ async def run_inventory_agent(
                 )
         else:
             emit(f"❓ [Stock] {item.product_name}: not found in catalogue — AI will resolve")
+        await asyncio.sleep(0)
 
     emit("🤖 [InventoryAgent] Calling AI model to generate quote...")
+    await asyncio.sleep(0)
 
     inventory_json = json.dumps(
         [
@@ -113,35 +116,46 @@ async def run_inventory_agent(
         },
     ]
 
+    def _clean_json(text: str) -> str:
+        import re as _re
+        # Strip markdown fences
+        fence = _re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        if fence:
+            text = fence.group(1).strip()
+        elif text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.startswith("json"):
+                text = text[4:].strip()
+        # Remove trailing commas before } or ] — common Gemini quirk
+        text = _re.sub(r",\s*([}\]])", r"\1", text)
+        return text.strip()
+
     try:
         raw_output = ""
-        for attempt in range(2):
+        data = None
+        for attempt in range(3):
             raw_output = await run_agent_loop(
                 model=settings.model_reasoning,
                 messages=messages,
                 tools=[],
                 tool_executors={},
             )
-            raw_output = raw_output.strip()
-            # Strip any markdown code fences the model may have added
-            import re as _re
-            fence_match = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_output)
-            if fence_match:
-                raw_output = fence_match.group(1).strip()
-            elif raw_output.startswith("```"):
-                raw_output = raw_output.strip("`").strip()
-                if raw_output.startswith("json"):
-                    raw_output = raw_output[4:].strip()
-            if raw_output:
+            raw_output = _clean_json(raw_output.strip())
+            if not raw_output:
+                logger.warning("Inventory agent got empty response (attempt %d/3), retrying...", attempt + 1)
+                emit(f"⚠️ [InventoryAgent] Empty AI response, retrying... ({attempt + 1}/3)")
+                await asyncio.sleep(5)
+                continue
+            try:
+                data = json.loads(raw_output)
                 break
-            logger.warning("Inventory agent got empty response (attempt %d/2), retrying...", attempt + 1)
-            emit(f"⚠️ [InventoryAgent] Empty AI response, retrying... ({attempt + 1}/2)")
-            await asyncio.sleep(5)
+            except json.JSONDecodeError as parse_err:
+                logger.warning("Inventory agent JSON parse error (attempt %d/3): %s", attempt + 1, parse_err)
+                emit(f"⚠️ [InventoryAgent] Malformed JSON, retrying... ({attempt + 1}/3)")
+                await asyncio.sleep(3)
 
-        if not raw_output:
-            raise json.JSONDecodeError("Empty response from model", "", 0)
-
-        data = json.loads(raw_output)
+        if data is None:
+            raise json.JSONDecodeError("Failed to get valid JSON after 3 attempts", "", 0)
 
         resolved_items = [
             ResolvedOrderItem(
