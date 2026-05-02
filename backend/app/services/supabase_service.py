@@ -374,6 +374,15 @@ async def get_inventory(merchant_id: str) -> list[dict]:
     return result.data or []
 
 
+async def retrieve_few_shot_examples(query_embedding: list[float], match_count: int = 3) -> list[dict]:
+    """Return the most semantically similar few-shot examples for dynamic prompt injection."""
+    result = get_supabase().rpc(
+        "match_few_shot_examples",
+        {"query_embedding": query_embedding, "match_count": match_count},
+    ).execute()
+    return result.data or []
+
+
 async def get_knowledge_base_rules(merchant_id: str) -> str:
     """Return concatenated business rules text for RAG injection."""
     result = (

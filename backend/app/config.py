@@ -5,15 +5,19 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     model_config = {"protected_namespaces": ("settings_",), "env_file": ".env", "env_file_encoding": "utf-8"}
 
-    # Ilmu.ai GLM
+    # Ilmu.ai GLM (kept for reference, currently inactive)
     ilmu_api_key: str = ""
     ilmu_base_url: str = "https://api.ilmu.ai/anthropic"
 
-    # Model IDs — ilmu-glm-5.1 for all tasks
-    model_reasoning: str = "ilmu-glm-5.1"
-    model_fast: str = "ilmu-glm-5.1"
-    model_vision: str = "ilmu-glm-5.1"
-    model_asr: str = "ilmu-glm-5.1"
+    # Google Gemini (primary — free tier via AI Studio)
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    # Model IDs
+    model_reasoning: str = "gemini-2.0-flash"
+    model_fast: str = "gemini-2.0-flash"
+    model_vision: str = "gemini-2.0-flash"
+    model_asr: str = "gemini-2.0-flash"
 
     # Supabase
     supabase_url: str = "http://localhost:54321"

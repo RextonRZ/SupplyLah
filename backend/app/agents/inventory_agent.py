@@ -167,6 +167,7 @@ async def run_inventory_agent(
             delivery_fee=float(data.get("delivery_fee", 15.0)),
             grand_total=float(data.get("grand_total", 0)),
             quote_message=data.get("quote_message", ""),
+            out_of_stock_items=data.get("out_of_stock_items", []),
             requires_substitution=data.get("requires_substitution", False),
             notes=data.get("notes"),
         )

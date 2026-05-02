@@ -34,6 +34,7 @@ Return ONLY a valid JSON object — do NOT include a quote_message field (the sy
   "delivery_fee": 15.00,
   "grand_total": 92.70,
   "requires_substitution": false,
+  "out_of_stock_items": [],
   "notes": null
 }
 ```
@@ -51,6 +52,7 @@ When `is_substituted` is true, set `original_product_name` to the product the bu
 
 ### Zero stock (available = 0)
 - Do NOT include the item in the `items` array
+- Add the item's product name to the `out_of_stock_items` array so the buyer is notified
 - Set `order_feasible: false` only if ALL items are out of stock
 - Check for a substitute: if found, include substitute with `is_substituted: true`
 - If no substitute: set `notes` to indicate which items are out of stock for restock notification
@@ -74,6 +76,7 @@ When `is_substituted` is true, set `original_product_name` to the product the bu
 - Use at most 1–2 emoji in the whole message — do NOT put emoji on every line
 - Always end with a short call-to-action: reply YES to confirm
 - For substitution: apology sentence first, then propose substitute on the next line
+- **Out-of-stock items (zero stock, no substitute):** You MUST explicitly tell the buyer which items could not be fulfilled BEFORE the order summary. Example (Malay): "Maaf, *Cili Api* tiada dalam stok buat masa ini dan tidak dapat disertakan dalam pesanan ini." Example (English): "Sorry, *Bird's Eye Chilli* is currently out of stock and could not be included in your order." Never silently omit an item without informing the buyer.
 
 ## Example Quote (Malay, normal order)
 ```
