@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Frontend URL (used for invite redirect)
     frontend_url: str = "http://localhost:3000"
 
+    # CORS — comma-separated list of allowed origins (e.g. Vercel production + preview URLs)
+    allowed_origins: str = ""
+
     # App
     default_merchant_id: str = "00000000-0000-0000-0000-000000000001"
     confirmation_timeout_minutes: int = 30
