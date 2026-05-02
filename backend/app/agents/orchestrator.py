@@ -219,22 +219,18 @@ def _build_payment_request_message(lang: str, amount: float, order_id: str = "",
             f"✅ Pesanan anda telah disahkan!\n\n"
             f"Jumlah bayaran: *RM{amount:.2f}*\n\n"
             f"Sila pilih kaedah pembayaran:\n\n"
-            f"🏦 Online Banking\n"
-            f"📱 Touch 'n Go eWallet → {tng_url}\n"
-            f"💳 Kredit / Debit Kad\n\n"
-            f"──────────────────\n"
-            f"Atau taip *COD* untuk bayar tunai semasa penghantaran.\n"
+            f"Online Banking\n"
+            f"Touch 'n Go eWallet\n"
+            f"Kredit / Debit Kad\n"
             f"{marker}"
         )
     return (
         f"✅ Order confirmed!\n\n"
         f"Amount due: *RM{amount:.2f}*\n\n"
         f"Please choose your payment method:\n\n"
-        f"🏦 Online Banking\n"
-        f"📱 Touch 'n Go eWallet → {tng_url}\n"
-        f"💳 Credit / Debit Card\n\n"
-        f"──────────────────\n"
-        f"Or type *COD* to pay cash on delivery.\n"
+        f"Online Banking\n"
+        f"Touch 'n Go eWallet\n"
+        f"Credit / Debit Card\n"
         f"{marker}"
     )
 

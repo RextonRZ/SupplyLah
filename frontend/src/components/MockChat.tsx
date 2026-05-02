@@ -367,33 +367,66 @@ function PaymentCard({ text, onTngPay }: { text: string; onTngPay: (d: TngData) 
   const orderId  = markerMatch?.[1] ?? "";
   const merchant = markerMatch?.[3] ?? "Demo+Wholesaler+Sdn+Bhd";
 
-  const cleanText = text
+  // Strip method list lines and marker, keep only the confirmation header + amount
+  const bodyText = text
     .replace(PAYMENT_MARKER_RE, "")
     .replace(TNG_URL_RE, "")
-    .replace(/📱[^\n]*\n?/g, "")
+    .split("\n")
+    .filter(l => !["Online Banking","Touch 'n Go eWallet","Kredit / Debit Kad","Credit / Debit Card"].includes(l.trim()))
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   return (
-    <div className="space-y-2.5">
-      <WhatsAppText text={cleanText} />
-      <div className="space-y-1.5">
-        <button disabled className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 opacity-40 cursor-not-allowed text-left">
-          <span>🏦</span>
-          <div><p className="text-xs font-semibold text-slate-700">Online Banking</p><p className="text-[10px] text-slate-400">Maybank · CIMB · RHB</p></div>
+    // WhatsApp template card — no outer padding, the bubble provides it
+    <div className="-mx-3 -my-2 overflow-hidden rounded-xl">
+      {/* Header image */}
+      <img
+        src="/whatsappheader.png"
+        alt=""
+        className="w-full h-28 object-cover"
+        onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+      />
+
+      {/* Body */}
+      <div className="px-3 pt-2 pb-1">
+        <WhatsAppText text={bodyText} />
+      </div>
+
+      {/* WhatsApp template buttons — separated by hairline borders */}
+      <div className="border-t border-slate-200 mt-1">
+        {/* Online Banking */}
+        <button className="w-full flex items-center justify-center gap-2 py-2.5 border-b border-slate-100 transition-colors hover:bg-slate-50 active:bg-slate-100" style={{ color: "#00A884" }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+          <span className="text-xs font-medium">Online Banking</span>
         </button>
+
+        {/* Touch 'n Go eWallet — opens TNG overlay */}
         <button
           onClick={() => onTngPay({ orderId, amount, merchant })}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border-2 text-left transition-colors"
-          style={{ borderColor: "#005EB8", background: "#005EB8" }}
+          className="w-full flex items-center justify-center gap-2 py-2.5 border-b border-slate-100 transition-colors hover:bg-slate-50 active:bg-slate-100"
+          style={{ color: "#00A884" }}
         >
-          <span>📱</span>
-          <div className="flex-1"><p className="text-xs font-bold text-white">Touch 'n Go eWallet</p><p className="text-[10px] text-blue-200">Tap to pay RM {amount}</p></div>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M7 17L17 7M7 7h10v10"/></svg>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="2" y="5" width="20" height="14" rx="2"/>
+            <path d="M2 10h20"/>
+            <path d="M7 15h2M11 15h4"/>
+          </svg>
+          <span className="text-xs font-medium">Touch 'n Go eWallet</span>
         </button>
-        <button disabled className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 opacity-40 cursor-not-allowed text-left">
-          <span>💳</span>
-          <div><p className="text-xs font-semibold text-slate-700">Credit / Debit Card</p><p className="text-[10px] text-slate-400">Visa · Mastercard</p></div>
+
+        {/* Credit / Debit Card */}
+        <button className="w-full flex items-center justify-center gap-2 py-2.5 transition-colors hover:bg-slate-50 active:bg-slate-100" style={{ color: "#00A884" }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="1" y="4" width="22" height="16" rx="2"/>
+            <line x1="1" y1="10" x2="23" y2="10"/>
+            <circle cx="6" cy="15" r="1" fill="currentColor"/>
+            <circle cx="10" cy="15" r="1" fill="currentColor"/>
+          </svg>
+          <span className="text-xs font-medium">Credit / Debit Card</span>
         </button>
       </div>
     </div>
