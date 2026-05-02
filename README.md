@@ -1,17 +1,14 @@
 # SupplyLah
 **From Chat. To Chain.**
 
-## 🎬 Video Pitch
-[![Watch the Pitch](https://img.shields.io/badge/Watch-Video%20Pitch-red?style=for-the-badge&logo=google-drive)](https://drive.google.com/file/d/1Io4of-N1gpotvdlsG-dt2R2u7Th_677c/view?usp=sharing)
-
-## 📄 Final Project Documents
+## Final Project Documents
 
 | Document | Link |
 |----------|------|
-| 📊 Final Pitch Deck | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Final%20Pitch%20Deck.pdf) |
-| 🚀 Deployment Plan | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Deployment%20Plan.pdf) |
-| 💼 Business Proposal | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Business%20Proposal.pdf) |
-| ✅ Refined Testing Analysis Documentation | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Refined%20Testing%20Analysis%20Documentation.pdf) |
+| Final Pitch Deck | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Final%20Pitch%20Deck.pdf) |
+| Deployment Plan | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Deployment%20Plan.pdf) |
+| Business Proposal | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Business%20Proposal.pdf) |
+| Refined Testing Analysis Documentation | [View PDF](https://github.com/RextonRZ/SupplyLah/blob/main/Refined%20Testing%20Analysis%20Documentation.pdf) |
 
 ---
 
