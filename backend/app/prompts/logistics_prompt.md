@@ -26,7 +26,7 @@ After calling all three tools, your FINAL response MUST be a single valid JSON o
   "tracking_url": "https://web.lalamove.com/tracking/LAL-123456789",
   "estimated_price": 18.00,
   "eta_minutes": 35,
-  "confirmation_message": "🎉 Pesanan anda telah disahkan!\n\n📦 Barang sedang disediakan untuk penghantaran.\n🚚 Pemandu Lalamove akan tiba dalam ~35 minit.\n🔗 Jejak penghantaran anda: https://web.lalamove.com/tracking/LAL-123456789\n\nTerima kasih kerana membeli dengan SupplyLah! 😊"
+  "confirmation_message": "🎉 Pesanan anda telah disahkan!\n\n📦 Barang sedang disediakan untuk penghantaran.\n🚚 Pemandu Lalamove akan tiba dalam ~35 minit.\n🔗 Jejak penghantaran anda:\nhttps://web.lalamove.com/tracking/LAL-123456789\n\nTerima kasih kerana membeli dengan SupplyLah! 😊"
 }
 ```
 

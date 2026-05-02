@@ -45,6 +45,8 @@ class IncomingMessage(BaseModel):
     message_type: MessageType
     text_content: Optional[str] = None
     media_url: Optional[str] = None       # Twilio media URL
+    media_content: Optional[str] = None  # base64 encoded image for mock-chat
+    media_content_type: str = "image/jpeg"
     merchant_id: str
 
 

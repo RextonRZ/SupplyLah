@@ -1928,7 +1928,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<
     "command" | "demo" | "inventory" | "team" | "settings"
   >("command");
-  const [chatMode, setChatMode] = useState<"text" | "voice">("text");
+  const [chatMode, setChatMode] = useState<"text" | "voice" | "image">("text");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true); // skeleton until first fetch done
   const [userRole, setUserRole] = useState<
@@ -2110,7 +2110,7 @@ export default function Dashboard() {
       for (const m of newAgentMsgs) {
         await new Promise(r => setTimeout(r, 700));
         setChatMessages(prev => [...prev, m]);
-        addLog(`📤 [Agent] ${m.text.slice(0, 60)}${m.text.length > 60 ? "…" : ""}`);
+        addLog(`📤 [Agent] ${(m.text ?? "").slice(0, 60)}${(m.text ?? "").length > 60 ? "…" : ""}`);
       }
     } else if (msg) {
       const now = new Date().toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
@@ -2518,13 +2518,16 @@ export default function Dashboard() {
                     <span>💬</span> Text Buyer
                   </button>
                   <button
-                    onClick={() => {
-                      setChatMode("voice");
-                      // setDemoChatKey((k) => k + 1);
-                    }}
+                    onClick={() => setChatMode("voice")}
                     className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors ${chatMode === "voice" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
                   >
                     <span>🎙️</span> Voice Buyer
+                  </button>
+                  <button
+                    onClick={() => setChatMode("image")}
+                    className={`w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors ${chatMode === "image" ? "bg-white text-teal-700 shadow-sm" : "text-slate-500 hover:bg-slate-200/50"}`}
+                  >
+                    <span>🖼️</span> Image Buyer
                   </button>
                 </div>
 
