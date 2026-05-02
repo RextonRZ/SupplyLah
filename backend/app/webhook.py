@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import asyncio
-import httpx
 
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -16,7 +14,8 @@ from app.models.schemas import IncomingMessage, MessageType
 from app.services import log_stream
 from app.services.twilio_service import send_whatsapp_message
 from app.services.s3_service import upload_media, generate_presigned_url
-from app.services.transcription_service import transcribe_audio_from_url 
+from app.services.transcription_service import transcribe_audio_from_url
+from app.workers.tasks import _transcribe_twilio_audio
 
 from pathlib import Path
 
@@ -37,10 +36,15 @@ async def twilio_webhook(
     MediaContentType0: str = Form(default=""),
     NumMedia: str = Form(default="0"),
 ):
-    """Receive inbound WhatsApp messages from Twilio and route to agent pipeline."""
+    """Receive inbound WhatsApp messages from Twilio and route to agent pipeline.
+
+    For the real Twilio path the handler immediately returns HTTP 200 / empty
+    TwiML and enqueues the heavy AI processing as a durable ARQ job in Redis.
+    This satisfies Twilio's 15-second webhook timeout under any load.
+    """
     settings = get_settings()
     from_number = From.replace("whatsapp:", "")
-    
+
     transcribed_text = None
 
     # Determine message type
@@ -48,34 +52,38 @@ async def twilio_webhook(
         ct = MediaContentType0.lower()
         if "audio" in ct or "ogg" in ct:
             msg_type = MessageType.AUDIO
-            # Process audio here for real Twilio path
-            if not settings.use_mock_whatsapp: # Only process for real Twilio path
-                # Kick off audio processing in the background, don't wait for it
-                asyncio.create_task(
-                    _process_audio_message_and_reply(from_number, MediaUrl0, MediaContentType0, settings)
+            if not settings.use_mock_whatsapp:
+                # Enqueue durable ARQ job — returns immediately (<1 ms Redis write)
+                await request.app.state.arq_pool.enqueue_job(
+                    "process_audio_and_reply",
+                    from_number,
+                    MediaUrl0,
+                    MediaContentType0,
+                    settings.default_merchant_id,
                 )
-                # Return empty TwiML immediately
                 return PlainTextResponse(
                     content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
                     media_type="application/xml",
                 )
-            
         elif "image" in ct:
             msg_type = MessageType.IMAGE
         else:
             msg_type = MessageType.TEXT
     else:
         msg_type = MessageType.TEXT
-        
-    # --- Synchronous path for mock_whatsapp (and text/image messages for real Twilio) ---
+
+    # --- Mock path: synchronous transcription for dev/demo ---
     if msg_type == MessageType.AUDIO and settings.use_mock_whatsapp:
-        # For mock WhatsApp, we want to wait for transcription to simulate synchronous flow
-        transcribed_text = await _process_audio_message(MediaUrl0, MediaContentType0, from_number)
+        transcribed_text = await _transcribe_twilio_audio(
+            MediaUrl0, MediaContentType0, from_number
+        )
         if transcribed_text is None:
-            await send_whatsapp_message(from_number, "Sorry, I couldn't process your voice note.")
+            await send_whatsapp_message(
+                from_number, "Sorry, I couldn't process your voice note."
+            )
             return PlainTextResponse(content="OK")
-        msg_type = MessageType.TEXT # After transcription, treat as text message
-        
+        msg_type = MessageType.TEXT
+
     final_text = transcribed_text or Body
     final_media_url = MediaUrl0 if msg_type == MessageType.IMAGE else None
 
@@ -94,48 +102,19 @@ async def twilio_webhook(
             logger.error("Webhook processing error: %s", exc, exc_info=True)
         return PlainTextResponse(content="OK")
 
-    # Real Twilio path: Twilio has a 15-second webhook timeout but AI processing
-    # can take longer. Return empty TwiML immediately, then send reply via outbound API.
-
-    async def _process_and_reply():
-        try:
-            reply = await handle_incoming_message(
-                from_number=from_number,
-                message_type=msg_type,
-                text_content=final_text,
-                media_url=final_media_url,
-                merchant_id=settings.default_merchant_id,
-            )
-            await send_whatsapp_message(from_number, reply)
-        except Exception as exc:
-            logger.error("Webhook background error: %s", exc, exc_info=True)
-
-    asyncio.create_task(_process_and_reply())
-    # Return empty TwiML immediately so Twilio doesn't time out
+    # Real Twilio path — enqueue durable ARQ job and return immediately
+    await request.app.state.arq_pool.enqueue_job(
+        "process_whatsapp_message",
+        from_number,
+        msg_type.value,
+        final_text,
+        final_media_url,
+        settings.default_merchant_id,
+    )
     return PlainTextResponse(
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
         media_type="application/xml",
     )
-
-# Helper for real Twilio audio path
-async def _process_audio_message_and_reply(from_number: str, media_url: str, content_type: str, settings):
-    """Processes audio and sends a reply for the real Twilio path (background task)."""
-    transcript = await _process_audio_message(media_url, content_type, from_number)
-    if transcript is None:
-        await send_whatsapp_message(from_number, "Sorry, I couldn't process your voice note.")
-        return
-
-    try:
-        reply = await handle_incoming_message(
-            from_number=from_number,
-            message_type=MessageType.TEXT, # Always TEXT after transcription
-            text_content=transcript,
-            media_url=None, # No media_url needed after transcription
-            merchant_id=settings.default_merchant_id,
-        )
-        await send_whatsapp_message(from_number, reply)
-    except Exception as exc:
-        logger.error("Webhook background audio reply error: %s", exc, exc_info=True)
 
 
 # ─────────────────────────────────────────
@@ -237,9 +216,9 @@ async def mock_chat(
     try:
         await handle_incoming_message(
             from_number=payload.from_number,
-            message_type=message_type,      # Changed from payload.message_type
-            text_content=text_content,      # Changed from payload.text_content
-            media_url=media_url,            # Changed from payload.media_url
+            message_type=message_type,
+            text_content=text_content,
+            media_url=media_url,
             merchant_id=payload.merchant_id or settings.default_merchant_id,
         )
     except Exception as exc:
@@ -251,50 +230,3 @@ async def mock_chat(
             log_stream.close(x_session_id)
 
     return {"replies": collector, "from_number": payload.from_number}
-
-# ─────────────────────────────────────────
-# Helper function for audio processing
-# ─────────────────────────────────────────
-async def _process_audio_message(
-    media_url: str, content_type: str, from_number: str
-) -> str | None:
-    """Downloads audio, uploads to S3, transcribes, and returns the transcript."""
-    settings = get_settings()
-
-    try:
-        # 1. Download audio from Twilio Media URL
-        async with httpx.AsyncClient() as client_http:
-            audio_response = await client_http.get(media_url)
-            audio_response.raise_for_status()
-            audio_content = audio_response.content
-
-        # 2. Upload to S3
-        s3_file_url = await upload_media(audio_content, content_type, from_number=from_number)
-
-        if not s3_file_url:
-            logger.error(f"Failed to upload audio to S3 for {from_number}")
-            return None
-
-        # 3. Generate pre-signed URL for Groq (if direct S3 URL isn't sufficient or secure)
-        # Note: Groq's Whisper API requires the actual file content, so we download again in transcription_service.
-        # However, for consistency and future-proofing (if Groq adds direct URL support), we keep this pattern.
-        # For now, transcription_service will download from this pre-signed URL.
-        s3_key = s3_file_url.split(".local/")[-1] if ".local/" in s3_file_url else s3_file_url.split(".com/")[-1]
-        presigned_url = await generate_presigned_url(s3_key, expiration=600) # Valid for 10 minutes
-
-        if not presigned_url:
-            logger.error(f"Failed to generate pre-signed URL for {s3_key}")
-            return None
-
-        # 4. Transcribe using Groq
-        transcription_result = await transcribe_audio_from_url(presigned_url, content_type)
-        transcript = transcription_result["transcript"]
-        logger.info(f"Transcription for {from_number}: {transcript}")
-        return transcript
-
-    except httpx.RequestError as e:
-        logger.error(f"HTTP error downloading media from {media_url}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Error processing audio for {from_number}: {e}", exc_info=True)
-        return None

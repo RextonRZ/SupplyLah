@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # Groq
     groq_api_key: str = ""
 
+    # Redis / ARQ task queue
+    redis_url: str = "redis://localhost:6379"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -6,6 +6,8 @@ import logging
 from contextlib import asynccontextmanager
 
 import structlog
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,9 +30,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
     logger.info("SupplyLah backend starting up…")
     ensure_inventory_worker()
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+    logger.info("ARQ Redis pool connected at %s", settings.redis_url)
     yield
+    await app.state.arq_pool.close()
     logger.info("SupplyLah backend shutting down.")
 
 
