@@ -116,10 +116,12 @@ async def run_intake_agent(
         items = [
             OrderLineItem(
                 product_name=i["product_name"],
+                raw_name=i.get("raw_name"),
                 quantity=i.get("quantity", 0),
                 unit=i.get("unit"),
             )
             for i in data.get("items", [])
+            if i.get("product_name")
         ]
 
         return IntakeResult(

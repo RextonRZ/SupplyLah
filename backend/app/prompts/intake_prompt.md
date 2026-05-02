@@ -24,8 +24,8 @@ Return ONLY a valid JSON object (no markdown, no explanation):
 {
   "intent": "order",
   "items": [
-    {"product_name": "Minyak Masak 5L", "quantity": 3, "unit": "bottle"},
-    {"product_name": "Beras Tempatan 10kg", "quantity": 2, "unit": "bag"}
+    {"product_name": "Minyak Masak 5L", "raw_name": "minyak", "quantity": 3, "unit": "bottle"},
+    {"product_name": "Beras Tempatan 10kg", "raw_name": "beras", "quantity": 2, "unit": "bag"}
   ],
   "delivery_address": "No 12, Jalan Ampang, KL",
   "language_detected": "mixed",
@@ -36,6 +36,12 @@ Return ONLY a valid JSON object (no markdown, no explanation):
   "notes": "Customer seems to be a regular buyer based on tone"
 }
 ```
+
+### Item fields
+- `product_name` — **exact** `product_name` from the catalog (never hallucinate)
+- `raw_name` — the buyer's original text for this product, stripped of quantities and units (e.g. buyer said "3 botol minyak masak" → `raw_name: "minyak masak"`)
+- `quantity` — numeric value only (integer)
+- `unit` — unit of measurement extracted from the message (e.g. `"bag"`, `"botol"`, `"tin"`, `"kg"`); `null` if absent
 
 ## Previous Order References
 Set `references_previous_order` to `true` when the buyer's message references a past order instead of specifying items directly. Examples:
@@ -49,9 +55,15 @@ When `references_previous_order` is true, leave `items` as an empty list — the
 ## Confidence Rules
 - **≥ 0.85**: All items clearly identified with quantities → proceed
 - **0.65–0.84**: Some ambiguity but resolvable → set `clarification_needed: false` but note in `notes`
-- **< 0.65**: Critical item info missing (no product name or no quantity) → set `clarification_needed: true` and write a polite `clarification_message` in the **buyer's language**
+- **< 0.65**: Critical item info missing (no product name or no quantity) → set `clarification_needed: true`
 
 **IMPORTANT**: Do NOT set `clarification_needed: true` just because the delivery address is missing. The address will be collected separately. Only flag clarification when the ORDER ITEMS themselves are unclear or missing quantities.
+
+## clarification_message Rules
+
+**Always set `clarification_message: null`.** This field is ignored by the system — the buyer-facing message is generated entirely from standardised templates based on `clarification_needed` and `items`. Do not write anything in this field.
+
+A single-digit reply (e.g. "1", "2", "3") or a short word should be treated as intent `order` with `clarification_needed: false` and `items: []` — the system handles the state routing.
 
 ## Few-Shot Examples
 
@@ -62,8 +74,8 @@ When `references_previous_order` is true, leave `items` as an empty list — the
 {
   "intent": "order",
   "items": [
-    {"product_name": "Minyak Masak 5L", "quantity": 3, "unit": "botol"},
-    {"product_name": "Beras Tempatan 10kg", "quantity": 2, "unit": "bag"}
+    {"product_name": "Minyak Masak 5L", "raw_name": "minyak masak", "quantity": 3, "unit": "botol"},
+    {"product_name": "Beras Tempatan 10kg", "raw_name": "beras", "quantity": 2, "unit": "bag"}
   ],
   "delivery_address": "Kampung Baru, Kuala Lumpur",
   "language_detected": "mixed",
@@ -81,8 +93,8 @@ When `references_previous_order` is true, leave `items` as an empty list — the
 {
   "intent": "order",
   "items": [
-    {"product_name": "Mee Segera 30pcs", "quantity": 10, "unit": "carton"},
-    {"product_name": "Gula Pasir 1kg", "quantity": 5, "unit": "unit"}
+    {"product_name": "Mee Segera 30pcs", "raw_name": "maggi", "quantity": 10, "unit": "carton"},
+    {"product_name": "Gula Pasir 1kg", "raw_name": "sugar", "quantity": 5, "unit": "kilo"}
   ],
   "delivery_address": "SS2, Petaling Jaya",
   "language_detected": "en",
@@ -99,7 +111,7 @@ When `references_previous_order` is true, leave `items` as an empty list — the
 ```json
 {
   "intent": "order",
-  "items": [{"product_name": "Sardin 425g", "quantity": 0, "unit": null}],
+  "items": [{"product_name": "Sardin 425g", "raw_name": "sardin", "quantity": 0, "unit": null}],
   "delivery_address": null,
   "language_detected": "ms",
   "confidence": 0.40,

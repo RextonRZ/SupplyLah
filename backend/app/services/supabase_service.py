@@ -1,6 +1,7 @@
 """Supabase data access layer — all DB reads/writes go through here."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -130,6 +131,26 @@ async def get_restock_pending_order(customer_id: str) -> Optional[OrderRow]:
         row = result.data[0]
         notes = row.get("order_notes") or ""
         if "restock_notification" in notes:
+            return OrderRow(**row)
+    return None
+
+
+async def get_product_clarification_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Pending order awaiting product clarification from the buyer."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.PENDING.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        row = result.data[0]
+        notes = row.get("order_notes") or ""
+        if "product_clarification" in notes:
             return OrderRow(**row)
     return None
 
@@ -381,6 +402,115 @@ async def retrieve_few_shot_examples(query_embedding: list[float], match_count: 
         {"query_embedding": query_embedding, "match_count": match_count},
     ).execute()
     return result.data or []
+
+
+async def resolve_product(
+    raw_item_name: str,
+    merchant_id: str,
+) -> Optional[ProductRow]:
+    """Resolve a raw product name to a ProductRow via three-tier hybrid search.
+
+    Tier 1 — ILIKE: case-insensitive substring match on product_name.
+    Tier 2 — Alias: raw name found inside the slang_aliases text[] column.
+    Tier 3 — Vector: pgvector cosine similarity via match_products RPC
+              (threshold 0.60, non-blocking via asyncio.to_thread).
+
+    Returns None when no match is found across all three tiers.
+    """
+    db = get_supabase()
+    name = raw_item_name.strip()
+
+    # ── Tier 1: ILIKE on product_name ──────────────────────────────────────
+    result = (
+        db.table("product")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .ilike("product_name", f"%{name}%")
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        logger.debug("resolve_product [ILIKE] '%s' → %s", name, result.data[0]["product_name"])
+        return ProductRow(**result.data[0])
+
+    # ── Tier 2: Alias containment (slang_aliases @> ARRAY[name]) ──────────
+    # PostgREST cs operator checks that the column contains all listed elements.
+    result = (
+        db.table("product")
+        .select("*")
+        .eq("merchant_id", merchant_id)
+        .filter("slang_aliases", "cs", f'{{"{name.lower()}"}}')
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        logger.debug("resolve_product [Alias] '%s' → %s", name, result.data[0]["product_name"])
+        return ProductRow(**result.data[0])
+
+    # ── Tier 3: pgvector semantic search ───────────────────────────────────
+    # embed_text() is CPU-bound — run in a thread pool so it doesn't block
+    # the asyncio event loop during peak webhook spikes.
+    from app.services import embedding_service
+    embedding = await asyncio.to_thread(embedding_service.embed_text, name)
+    result = db.rpc(
+        "match_products",
+        {
+            "query_embedding": embedding,
+            "p_merchant_id": merchant_id,
+            "match_threshold": 0.60,
+            "match_count": 1,
+        },
+    ).execute()
+    if result.data:
+        logger.debug(
+            "resolve_product [Vector] '%s' → %s (score ≥ 0.60)",
+            name, result.data[0].get("product_name"),
+        )
+        return ProductRow(**result.data[0])
+
+    logger.warning("resolve_product: no match found for '%s' (merchant %s)", name, merchant_id)
+    return None
+
+
+async def resolve_product_candidates(
+    raw_item_name: str,
+    merchant_id: str,
+    top_n: int = 3,
+) -> list[ProductRow]:
+    """Return up to top_n candidate ProductRows for an ambiguous item name.
+
+    Uses the pgvector match_products RPC at a lower threshold (0.45) so that
+    plausible-but-uncertain matches surface as choices for the buyer.
+    Re-fetches full product rows by ID so that all fields (unit, stock_quantity,
+    slang_aliases, etc.) are always present regardless of what the RPC returns.
+    """
+    from app.services import embedding_service
+    db = get_supabase()
+    name = raw_item_name.strip()
+    embedding = await asyncio.to_thread(embedding_service.embed_text, name)
+    rpc_result = db.rpc(
+        "match_products",
+        {
+            "query_embedding": embedding,
+            "p_merchant_id": merchant_id,
+            "match_threshold": 0.45,
+            "match_count": top_n,
+        },
+    ).execute()
+    if not rpc_result.data:
+        return []
+    # Re-fetch full rows by product_id to guarantee all columns (unit, stock_quantity, etc.)
+    product_ids = [r["product_id"] for r in rpc_result.data]
+    full_result = (
+        db.table("product")
+        .select("*")
+        .in_("product_id", product_ids)
+        .execute()
+    )
+    # Preserve the RPC's relevance ordering
+    order_map = {pid: idx for idx, pid in enumerate(product_ids)}
+    rows = sorted(full_result.data or [], key=lambda r: order_map.get(r["product_id"], 999))
+    return [ProductRow(**r) for r in rows]
 
 
 async def get_knowledge_base_rules(merchant_id: str) -> str:

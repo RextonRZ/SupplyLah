@@ -53,7 +53,8 @@ class IncomingMessage(BaseModel):
 # ─────────────────────────────────────────
 
 class OrderLineItem(BaseModel):
-    product_name: str
+    product_name: str          # Resolved canonical name from the product catalog
+    raw_name: Optional[str] = None  # Original buyer text before alias resolution
     quantity: int
     unit: Optional[str] = None
 
@@ -126,6 +127,7 @@ class ProductRow(BaseModel):
     product_sku: Optional[str] = None
     unit_price: float
     stock_quantity: int
+    unit: Optional[str] = None
     slang_aliases: list[str] = Field(default_factory=list)
     merchant_id: str
 

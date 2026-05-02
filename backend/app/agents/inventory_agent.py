@@ -159,15 +159,64 @@ async def run_inventory_agent(
             for i in data.get("items", [])
         ]
 
+        # ── Hard stock validation ─────────────────────────────────────────────
+        # The LLM can hallucinate OOS even when stock_quantity > 0. Re-check
+        # every item against live DB values and correct fulfilled_qty / feasibility.
+        product_map = {p.product_id: p for p in products}
+        name_map = {p.product_name.lower(): p for p in products}
+        corrected_oos: list[str] = []
+        for item in resolved_items:
+            live = product_map.get(item.product_id) or name_map.get(item.product_name.lower())
+            if live is None:
+                continue
+            if item.fulfilled_qty == 0 and not item.is_substituted and live.stock_quantity > 0:
+                # LLM wrongly said OOS — correct it
+                correctable_qty = min(item.requested_qty, live.stock_quantity)
+                emit(
+                    f"🔧 [Inventory] Correcting LLM error: '{item.product_name}' has "
+                    f"{live.stock_quantity} in stock but LLM said 0 — setting fulfilled_qty={correctable_qty}"
+                )
+                item.fulfilled_qty = correctable_qty
+                item.line_total = round(correctable_qty * item.unit_price, 2)
+            elif item.fulfilled_qty > 0 and live.stock_quantity == 0:
+                # LLM said in-stock but DB says 0 — correct it
+                emit(
+                    f"🔧 [Inventory] Correcting LLM error: '{item.product_name}' has 0 stock "
+                    f"but LLM said fulfilled_qty={item.fulfilled_qty} — setting to 0"
+                )
+                item.fulfilled_qty = 0
+                item.line_total = 0.0
+                corrected_oos.append(item.product_name)
+            elif item.fulfilled_qty > live.stock_quantity:
+                # LLM over-fulfilled — cap at actual stock
+                emit(
+                    f"🔧 [Inventory] Capping '{item.product_name}': "
+                    f"LLM fulfilled {item.fulfilled_qty} but only {live.stock_quantity} available"
+                )
+                item.fulfilled_qty = live.stock_quantity
+                item.line_total = round(live.stock_quantity * item.unit_price, 2)
+
+        # Recompute totals after corrections
+        total_amount = round(sum(i.line_total for i in resolved_items), 2)
+        delivery_fee = float(data.get("delivery_fee", 15.0))
+        discount_applied = float(data.get("discount_applied", 0))
+        grand_total = round(total_amount - discount_applied + delivery_fee, 2)
+        any_fulfilled = any(i.fulfilled_qty > 0 for i in resolved_items)
+
+        out_of_stock = list(set(data.get("out_of_stock_items", []) + corrected_oos))
+        # Remove items that were corrected back to in-stock from the OOS list
+        corrected_back = {i.product_name for i in resolved_items if i.fulfilled_qty > 0}
+        out_of_stock = [n for n in out_of_stock if n not in corrected_back]
+
         return InventoryResult(
-            order_feasible=data.get("order_feasible", False),
+            order_feasible=any_fulfilled,
             items=resolved_items,
-            total_amount=float(data.get("total_amount", 0)),
-            discount_applied=float(data.get("discount_applied", 0)),
-            delivery_fee=float(data.get("delivery_fee", 15.0)),
-            grand_total=float(data.get("grand_total", 0)),
+            total_amount=total_amount,
+            discount_applied=discount_applied,
+            delivery_fee=delivery_fee,
+            grand_total=grand_total,
             quote_message=data.get("quote_message", ""),
-            out_of_stock_items=data.get("out_of_stock_items", []),
+            out_of_stock_items=out_of_stock,
             requires_substitution=data.get("requires_substitution", False),
             notes=data.get("notes"),
         )

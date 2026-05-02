@@ -28,6 +28,15 @@ from app.models.schemas import (
     ResolvedOrderItem,
 )
 from app.services import supabase_service, twilio_service
+from app.services.clarification_messages import (
+    build_ask_message,
+    build_ask_quantity,
+    build_retry_message,
+    build_cancelled_by_buyer,
+    build_cancelled_max_retries,
+    build_no_stock,
+    build_no_match,
+)
 from app.services.log_stream import emit, emit_message
 from app.services.glm_client import describe_image, transcribe_audio
 from app.services.s3_service import upload_media, generate_presigned_url 
@@ -1021,6 +1030,386 @@ async def _merge_repeat_modifications(
 # Core orchestration handlers
 # ─────────────────────────────────────────
 
+async def _handle_product_clarification_reply(
+    raw_text: str,
+    clarification_order: OrderRow,
+    customer: CustomerRow,
+    merchant_id: str,
+) -> str:
+    """Handle the buyer's reply to a product disambiguation question.
+
+    The buyer was shown a numbered list of candidate products and a cancel option.
+    We parse their reply (digit, product name fragment, or cancellation keyword),
+    update the order state, and either:
+      • proceed to address collection / inventory if all items are now resolved, or
+      • ask about the next ambiguous item (if any remain), or
+      • cancel the order on request, or
+      • re-ask up to MAX_TRIES times before expiring.
+    """
+    import json as _json_pc
+    import re as _re_pc
+
+    MAX_TRIES = 3
+
+    try:
+        notes = _json_pc.loads(clarification_order.order_notes or "{}")
+    except Exception:
+        notes = {}
+
+    lang = notes.get("language", "ms")
+    pending_item = notes.get("pending_item", {})
+    candidates: list[dict] = notes.get("candidates", [])
+    resolved_items: list[dict] = notes.get("resolved_items", [])
+    clarification_count: int = notes.get("clarification_count", 0)
+    intake_result: dict = notes.get("intake_result", {})
+
+    cancel_count = len(candidates) + 1  # the last numbered option is always Cancel
+
+    def _parse_choice(text: str) -> int | None:
+        """Return 1-based choice index, or 0 for cancel, or None if unparseable."""
+        t = text.strip().lower()
+        # Explicit cancel keywords
+        if _re_pc.search(r"\b(batal|cancel|tak nak|no thanks|nevermind|stop)\b", t):
+            return 0
+        # Single digit
+        m = _re_pc.match(r"^(\d+)$", t)
+        if m:
+            n = int(m.group(1))
+            if n == cancel_count:
+                return 0
+            if 1 <= n <= len(candidates):
+                return n
+        # Partial product name match against candidate list
+        for i, c in enumerate(candidates, 1):
+            if c["product_name"].lower() in t or t in c["product_name"].lower():
+                return i
+        return None
+
+    choice = _parse_choice(raw_text)
+
+    if choice == 0:
+        # Buyer cancels
+        await supabase_service.update_order_status(clarification_order.order_id, OrderStatus.EXPIRED)
+        msg = build_cancelled_by_buyer(lang)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=clarification_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        emit(f"❌ [Clarification] Buyer cancelled order {clarification_order.order_id[:8]}")
+        return msg
+
+    if choice is not None:
+        # Valid pick — add resolved item to the confirmed list
+        chosen = candidates[choice - 1]
+        resolved_items.append({
+            "product_name": chosen["product_name"],
+            "raw_name": pending_item.get("raw_name"),
+            "quantity": pending_item.get("quantity", 1),
+            "unit": pending_item.get("unit"),
+            "resolved_product_id": chosen["product_id"],
+        })
+        emit(
+            f"✅ [Clarification] Buyer chose '{chosen['product_name']}' for "
+            f"'{pending_item.get('raw_name')}'"
+        )
+
+        # Check if there are more ambiguous items queued in resolved_items that still
+        # lack a resolved_product_id (they were parked there during the initial pass)
+        next_ambiguous = next(
+            (r for r in resolved_items if r.get("resolved_product_id") is None), None
+        )
+
+        if next_ambiguous:
+            # Ask about the next ambiguous item — only show in-stock options
+            next_name = next_ambiguous.get("raw_name") or next_ambiguous.get("product_name", "")
+            raw_next = await supabase_service.resolve_product_candidates(
+                next_name, merchant_id, top_n=5,
+            )
+            next_candidates = [c for c in raw_next if c.stock_quantity > 0]
+            if not next_candidates:
+                next_candidates = raw_next  # show all if all OOS (buyer can still pick)
+
+            next_msg = build_ask_message(
+                raw_name=next_name,
+                candidates=next_candidates,
+                lang=lang,
+                header_variant="next_item",
+            )
+
+            # Remove the item we're now asking about from resolved_items so it doesn't
+            # appear as confirmed yet, and move it to pending_item
+            resolved_items = [r for r in resolved_items if r is not next_ambiguous]
+            notes.update({
+                "clarification_count": 0,
+                "pending_item": next_ambiguous,
+                "candidates": [
+                    {"product_id": c.product_id, "product_name": c.product_name,
+                     "unit_price": float(c.unit_price), "unit": c.unit}
+                    for c in next_candidates
+                ],
+                "resolved_items": resolved_items,
+            })
+            await supabase_service.update_order_status(
+                clarification_order.order_id,
+                OrderStatus.PENDING,
+                order_notes=_json_pc.dumps(notes),
+            )
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                order_id=clarification_order.order_id,
+                sender_type="agent",
+                message_type="text",
+                content=next_msg,
+            )
+            return next_msg
+
+        # All items resolved — expire the clarification order and continue to
+        # address collection / inventory as if it were a freshly parsed order.
+        await supabase_service.update_order_status(clarification_order.order_id, OrderStatus.EXPIRED)
+
+        # Reconstruct intake items from the fully resolved list
+        from app.models.schemas import IntakeResult, OrderLineItem
+        reconstructed_items = [
+            OrderLineItem(
+                product_name=r["product_name"],
+                raw_name=r.get("raw_name"),
+                quantity=r.get("quantity", 1),
+                unit=r.get("unit"),
+            )
+            for r in resolved_items
+        ]
+        original_intake = IntakeResult(**intake_result) if intake_result else None
+        delivery_address = original_intake.delivery_address if original_intake else None
+
+        emit(
+            f"✅ [Clarification] All items resolved for order {clarification_order.order_id[:8]} "
+            f"— proceeding to inventory"
+        )
+
+        # Build a minimal IntakeResult so run_inventory_agent gets the right shape
+        synthesised_intake = IntakeResult(
+            intent="order",
+            items=reconstructed_items,
+            delivery_address=delivery_address,
+            language_detected=lang,
+            confidence=1.0,
+        )
+
+        # Hand off directly to inventory (skip Intake again)
+        from app.agents.inventory_agent import run_inventory_agent
+        inventory = await run_inventory_agent(synthesised_intake, merchant_id, lang)
+
+        # Reuse the address / inventory / confirmation flow from _handle_new_order
+        # by delegating to the shared helper
+        return await _continue_after_inventory(
+            inventory=inventory,
+            customer=customer,
+            merchant_id=merchant_id,
+            delivery_address=delivery_address,
+            lang=lang,
+            intake_items=reconstructed_items,
+        )
+
+    # Unparseable reply — re-ask
+    clarification_count += 1
+    if clarification_count >= MAX_TRIES:
+        await supabase_service.update_order_status(clarification_order.order_id, OrderStatus.EXPIRED)
+        msg = build_cancelled_max_retries(lang)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=clarification_order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=msg,
+        )
+        emit(
+            f"❌ [Clarification] Max retries reached for order "
+            f"{clarification_order.order_id[:8]} — expired"
+        )
+        return msg
+
+    # Re-ask with retry count
+    notes["clarification_count"] = clarification_count
+    await supabase_service.update_order_status(
+        clarification_order.order_id,
+        OrderStatus.PENDING,
+        order_notes=_json_pc.dumps(notes),
+    )
+    raw_name = pending_item.get("raw_name", "")
+    retry_msg = build_retry_message(raw_name=raw_name, candidates=candidates, lang=lang)
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=clarification_order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=retry_msg,
+    )
+    emit(
+        f"🟡 [Clarification] Retry {clarification_count}/{MAX_TRIES} for "
+        f"order {clarification_order.order_id[:8]}"
+    )
+    return retry_msg
+
+
+async def _continue_after_inventory(
+    inventory: "InventoryResult",
+    customer: CustomerRow,
+    merchant_id: str,
+    delivery_address: Optional[str],
+    lang: str,
+    intake_items: list,
+) -> str:
+    """Shared post-inventory logic reused by both _handle_new_order and
+    _handle_product_clarification_reply once all items are resolved."""
+    import json as _json_inv
+    settings = get_settings()
+
+    if not inventory.order_feasible or not inventory.items:
+        item_names = ", ".join(f"*{i.product_name}*" for i in (inventory.items or intake_items)) or "the item(s)"
+        if lang == "ms":
+            fallback = (
+                f"Maaf, {item_names} sudah habis stok buat masa ini 😔\n\n"
+                "Kami boleh menghantar mesej kepada anda apabila stok tiba semula.\n"
+                "Balas *YA* jika anda ingin menerima notifikasi, atau *TIDAK* untuk batal."
+            )
+        else:
+            fallback = (
+                f"Sorry, {item_names} is currently out of stock 😔\n\n"
+                "We can send you a message once it is restocked.\n"
+                "Reply *YES* if you would like to receive a notification, or *NO* to skip."
+            )
+        await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=0,
+            order_notes=_json_inv.dumps({"restock_notification": True, "language": lang, "items": item_names}),
+            confidence_score=0.8,
+            requires_human_review=False,
+            status=OrderStatus.PENDING,
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            sender_type="agent",
+            message_type="text",
+            content=fallback,
+        )
+        return fallback
+
+    no_sub_items = [i for i in inventory.items if i.fulfilled_qty == 0 and not i.is_substituted]
+    if no_sub_items:
+        names = ", ".join(f"*{i.product_name}*" for i in no_sub_items)
+        inventory.items = [i for i in inventory.items if not (i.fulfilled_qty == 0 and not i.is_substituted)]
+        if lang == "ms":
+            restock_msg = (
+                f"Kami tidak mempunyai pengganti yang sesuai untuk {names} buat masa ini.\n\n"
+                "Maaf atas kesulitan ini 😔 Kami boleh menghantar mesej kepada anda apabila stok tiba semula.\n"
+                "Balas *YA* jika anda ingin menerima notifikasi, atau *TIDAK* untuk batal."
+            )
+        else:
+            restock_msg = (
+                f"We don't have a suitable substitute for {names} right now.\n\n"
+                "Sorry for the inconvenience 😔 We can send you a message once it is restocked.\n"
+                "Reply *YES* if you would like to receive a notification, or *NO* to skip."
+            )
+        await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=0,
+            order_notes=_json_inv.dumps({"restock_notification": True, "language": lang, "items": names}),
+            confidence_score=0.8,
+            requires_human_review=False,
+            status=OrderStatus.PENDING,
+        )
+        if not inventory.items:
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                sender_type="agent",
+                message_type="text",
+                content=restock_msg,
+            )
+            return restock_msg
+        await _send_intermediate(customer, restock_msg)
+
+    sub_items = [i for i in inventory.items if i.is_substituted]
+    if sub_items:
+        emit(f"🔄 [Orchestrator] {len(sub_items)} substitution(s) needed — asking buyer first")
+        order = await supabase_service.create_order(
+            customer_id=customer.customer_id,
+            merchant_id=merchant_id,
+            order_amount=inventory.grand_total,
+            order_notes="",
+            confidence_score=1.0,
+            requires_human_review=False,
+            status=OrderStatus.AWAITING_SUBSTITUTION,
+        )
+        await supabase_service.update_order_status(
+            order.order_id,
+            OrderStatus.AWAITING_SUBSTITUTION,
+            order_notes=_json_inv.dumps({
+                "inventory_result": inventory.model_dump(),
+                "intake_result": {},
+                "delivery_address": delivery_address or "",
+                "language": lang,
+            }),
+        )
+        question = _build_substitution_question(lang, sub_items)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id,
+            order_id=order.order_id,
+            sender_type="agent",
+            message_type="text",
+            content=question,
+        )
+        return question
+
+    emit("💾 [DB] Saving resolved order to database...")
+    order = await supabase_service.create_order(
+        customer_id=customer.customer_id,
+        merchant_id=merchant_id,
+        order_amount=inventory.grand_total,
+        order_notes="",
+        confidence_score=1.0,
+        requires_human_review=False,
+        status=OrderStatus.AWAITING_CONFIRMATION,
+    )
+    await supabase_service.create_order_items(
+        order.order_id,
+        [
+            {
+                "product_id": item.product_id,
+                "product_name": item.product_name,
+                "quantity": item.fulfilled_qty,
+                "unit_price": item.unit_price,
+                "is_substituted": item.is_substituted,
+            }
+            for item in inventory.items
+        ],
+    )
+    await supabase_service.update_order_status(
+        order.order_id,
+        OrderStatus.AWAITING_CONFIRMATION,
+        order_notes=_json_inv.dumps({
+            "inventory_result": inventory.model_dump(),
+            "intake_result": {},
+            "delivery_address": delivery_address or "",
+            "language": lang,
+        }),
+    )
+    quote_msg = _build_quote_message(lang, inventory)
+    await supabase_service.log_message(
+        customer_id=customer.customer_id,
+        order_id=order.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=quote_msg,
+    )
+    emit(f"✅ [DB] Order {order.order_id[:8]}... saved — status: Awaiting Confirmation")
+    return quote_msg
+
+
 async def _handle_new_order(
     raw_text: str,
     customer: CustomerRow,
@@ -1043,9 +1432,10 @@ async def _handle_new_order(
 
     # Non-order intents
     if intake.intent != "order":
-        if intake.clarification_needed and intake.clarification_message:
-            # API error / parse failure — use the clarification message directly
-            msg = intake.clarification_message
+        if intake.clarification_needed:
+            # Never use the LLM's freeform clarification_message — use standardised template
+            lang = _detect_language(raw_text)
+            msg = build_no_match(lang)
         elif intake.intent == "inquiry":
             # Customer asking a question — answer from live context
             emit("💬 [Orchestrator] Inquiry intent detected — routing to inquiry handler")
@@ -1072,12 +1462,58 @@ async def _handle_new_order(
         msg = await _handle_previous_order_reference(raw_text, customer, merchant_id, lang)
         return msg
 
-    # Low confidence → ask for clarification
-    if intake.clarification_needed or intake.confidence < settings.low_confidence_threshold:
-        msg = intake.clarification_message or (
-            "Could you please clarify your order? I want to make sure I get it right! "
-            "/ Boleh nyatakan semula pesanan anda? Saya mahu pastikan segalanya betul!"
+    # Low confidence with NO items → run vector search on the raw text to find in-stock
+    # candidates and present them as a specific numbered list instead of a generic message.
+    # If items ARE present, fall through to the hybrid resolver below.
+    if intake.clarification_needed and not intake.items:
+        lang = _detect_language(raw_text)
+        import json as _json_clar
+        candidates = await supabase_service.resolve_product_candidates(
+            raw_text, merchant_id, top_n=5
         )
+        # Filter to in-stock only
+        in_stock = [c for c in candidates if c.stock_quantity > 0]
+
+        if in_stock:
+            msg = build_ask_message(
+                raw_name=raw_text.strip(),
+                candidates=in_stock,
+                lang=lang,
+                header_variant="clarification_needed",
+            )
+
+            # Save state so the buyer's numbered reply is routed to the clarification handler
+            await supabase_service.create_order(
+                customer_id=customer.customer_id,
+                merchant_id=merchant_id,
+                order_amount=0,
+                order_notes=_json_clar.dumps({
+                    "product_clarification": True,
+                    "clarification_count": 0,
+                    "pending_item": {
+                        "raw_name": raw_text.strip(),
+                        "quantity": 1,
+                        "unit": None,
+                    },
+                    "candidates": [
+                        {"product_id": c.product_id, "product_name": c.product_name,
+                         "unit_price": float(c.unit_price), "unit": c.unit}
+                        for c in in_stock
+                    ],
+                    "resolved_items": [],
+                    "intake_result": intake.model_dump(),
+                    "language": lang,
+                }),
+                confidence_score=intake.confidence,
+                requires_human_review=False,
+                status=OrderStatus.PENDING,
+            )
+            emit(f"🟡 [Orchestrator] clarification_needed with no items — listed {len(in_stock)} in-stock candidates for '{raw_text.strip()}'")
+        else:
+            # No in-stock candidates at all — fall back to generic clarification
+            msg = build_no_match(lang)
+            emit("🟡 [Orchestrator] clarification_needed, no items, no in-stock candidates — using generic message")
+
         await supabase_service.log_message(
             customer_id=customer.customer_id,
             sender_type="agent",
@@ -1089,6 +1525,210 @@ async def _handle_new_order(
     # Use our own language detection on the raw text — the intake agent's
     # language_detected is unreliable for short Malay messages
     lang = _detect_language(raw_text)
+
+    # clarification_needed with items present → product is known but quantity is 0.
+    # Ask for quantity using the standardised template (never use the LLM's freeform message).
+    if intake.clarification_needed and intake.items:
+        missing_qty_items = [i for i in intake.items if i.quantity == 0]
+        if missing_qty_items:
+            item = missing_qty_items[0]
+            # Resolve the product to get its canonical unit
+            resolved = await supabase_service.resolve_product(
+                item.raw_name or item.product_name, merchant_id
+            )
+            unit = (resolved.unit if resolved else None) or item.unit
+            msg = build_ask_quantity(item.product_name, unit, lang)
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                sender_type="agent",
+                message_type="text",
+                content=msg,
+            )
+            emit(f"🟡 [Orchestrator] quantity missing for '{item.product_name}' — asked buyer")
+            return msg
+
+    # ── Hybrid product resolver (Exact > Alias > Vector + Similarity gate) ──
+    # For each extracted item:
+    #   • similarity ≥ 0.80 → confident match, continue
+    #   • 0.55 ≤ similarity < 0.80 → ambiguous: fetch top-3 candidates and ask buyer
+    #   • similarity < 0.55 OR no match at all → truly unresolvable → human review
+    # Low overall confidence (< 0.70) also triggers ambiguous clarification path.
+    import json as _json_resolve
+    if intake.items:
+        emit("🔍 [Orchestrator] Validating extracted products via hybrid resolver (Exact → Alias → Vector)...")
+        from app.services.embedding_service import embed_text as _embed, cosine_similarity as _cosine
+        import asyncio as _aio
+
+        # Per-item resolution outcomes
+        # Each entry: {"item": OrderLineItem, "resolved": ProductRow|None, "sim": float}
+        resolution_results: list[dict] = []
+
+        for item in intake.items:
+            search_term = item.raw_name or item.product_name
+            resolved = await supabase_service.resolve_product(search_term, merchant_id)
+            if resolved is None and item.raw_name:
+                resolved = await supabase_service.resolve_product(item.product_name, merchant_id)
+
+            if resolved is None:
+                emit(f"⚠️  [Resolver] No catalog match for: '{search_term}'")
+                resolution_results.append({"item": item, "resolved": None, "sim": 0.0})
+            else:
+                # Always embed the buyer's raw text (search_term), not item.product_name.
+                # item.product_name may already equal resolved.product_name when the intake
+                # LLM resolves the alias itself, producing a false 100% similarity that
+                # bypasses the disambiguation flow entirely.
+                buyer_vec, catalog_vec = await _aio.gather(
+                    _aio.to_thread(_embed, search_term),
+                    _aio.to_thread(_embed, resolved.product_name),
+                )
+                sim = _cosine(buyer_vec, catalog_vec)
+                emit(
+                    f"{'✅' if sim >= 0.80 else '🟡'} [Resolver] '{search_term}' → "
+                    f"'{resolved.product_name}' (similarity: {round(sim * 100, 1)}%)"
+                )
+                resolution_results.append({"item": item, "resolved": resolved, "sim": sim})
+
+        # Classify each item into confident / ambiguous / unresolvable.
+        # Unresolvable = resolver found NO match at all (resolved is None).
+        # Any item where resolve_product returned a row is at worst ambiguous — a generic
+        # buyer term (e.g. "bawang") will always score low against a specific SKU name
+        # but the resolver still found relevant candidates to present to the buyer.
+        confident = [r for r in resolution_results if r["resolved"] and r["sim"] >= 0.80]
+        ambiguous = [r for r in resolution_results if r["resolved"] and r["sim"] < 0.80]
+        unresolvable = [r for r in resolution_results if not r["resolved"]]
+
+        # Low overall confidence shifts confirmed items into the ambiguous bucket
+        if intake.confidence < 0.70:
+            ambiguous = ambiguous + [r for r in confident if r["sim"] < 0.90]
+            confident = [r for r in confident if r["sim"] >= 0.90]
+
+        if unresolvable:
+            # Items that failed all tiers or were grossly mismatched → human review
+            bad_names = [r["item"].raw_name or r["item"].product_name for r in unresolvable]
+            review_msg = (
+                "Maaf, saya tidak dapat mengenal pasti beberapa barang dalam pesanan anda. "
+                "Staf kami akan semak dan balas tidak lama lagi! 🙏"
+                if lang == "ms" else
+                "Sorry, I couldn't identify some items in your order. "
+                "Our staff will review and get back to you shortly! 🙏"
+            )
+            await supabase_service.create_order(
+                customer_id=customer.customer_id,
+                merchant_id=merchant_id,
+                order_amount=0,
+                order_notes=_json_resolve.dumps({
+                    "requires_review": True,
+                    "unresolvable_items": bad_names,
+                    "intake_result": intake.model_dump(),
+                    "language": lang,
+                }),
+                confidence_score=intake.confidence,
+                requires_human_review=True,
+                status=OrderStatus.PENDING,
+            )
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                sender_type="agent",
+                message_type="text",
+                content=review_msg,
+            )
+            emit(f"🔴 [Orchestrator] Escalated to human review — unresolvable: {bad_names}")
+            return review_msg
+
+        if ambiguous:
+            # Build a numbered candidate list for the first ambiguous item and ask the buyer.
+            # Only show products that have stock (stock_quantity > 0).
+            first = ambiguous[0]
+            search_term = first["item"].raw_name or first["item"].product_name
+            raw_candidates = await supabase_service.resolve_product_candidates(
+                search_term, merchant_id, top_n=5
+            )
+            # Deduplicate: ensure the already-resolved product is in the list
+            seen_ids = {c.product_id for c in raw_candidates}
+            if first["resolved"] and first["resolved"].product_id not in seen_ids:
+                raw_candidates = [first["resolved"]] + raw_candidates[:4]
+            # Filter to in-stock only — no point offering out-of-stock options
+            candidates = [c for c in raw_candidates if c.stock_quantity > 0]
+            if not candidates:
+                # Edge case: all candidates out of stock — fall back to human review
+                await supabase_service.create_order(
+                    customer_id=customer.customer_id,
+                    merchant_id=merchant_id,
+                    order_amount=0,
+                    order_notes=_json_resolve.dumps({
+                        "requires_review": True,
+                        "unresolvable_items": [search_term],
+                        "intake_result": intake.model_dump(),
+                        "language": lang,
+                    }),
+                    confidence_score=intake.confidence,
+                    requires_human_review=True,
+                    status=OrderStatus.PENDING,
+                )
+                oos_msg = build_no_stock(search_term, lang)
+                await supabase_service.log_message(
+                    customer_id=customer.customer_id,
+                    sender_type="agent",
+                    message_type="text",
+                    content=oos_msg,
+                )
+                emit(f"🔴 [Orchestrator] All candidates OOS for '{search_term}' — escalated to review")
+                return oos_msg
+
+            clarify_msg = build_ask_message(
+                raw_name=search_term,
+                candidates=candidates,
+                lang=lang,
+                header_variant="ambiguous",
+            )
+
+            # Persist state so the reply is routed back here
+            other_items = [
+                {
+                    "product_name": r["item"].product_name,
+                    "raw_name": r["item"].raw_name,
+                    "quantity": r["item"].quantity,
+                    "unit": r["item"].unit,
+                    "resolved_product_id": r["resolved"].product_id if r["resolved"] else None,
+                }
+                for r in confident + ambiguous[1:]  # already-confirmed + remaining ambiguous
+            ]
+            await supabase_service.create_order(
+                customer_id=customer.customer_id,
+                merchant_id=merchant_id,
+                order_amount=0,
+                order_notes=_json_resolve.dumps({
+                    "product_clarification": True,
+                    "clarification_count": 0,
+                    "pending_item": {
+                        "raw_name": search_term,
+                        "quantity": first["item"].quantity,
+                        "unit": first["item"].unit,
+                    },
+                    "candidates": [
+                        {"product_id": c.product_id, "product_name": c.product_name,
+                         "unit_price": float(c.unit_price), "unit": c.unit}
+                        for c in candidates
+                    ],
+                    "resolved_items": other_items,
+                    "intake_result": intake.model_dump(),
+                    "language": lang,
+                }),
+                confidence_score=intake.confidence,
+                requires_human_review=False,
+                status=OrderStatus.PENDING,
+            )
+            await supabase_service.log_message(
+                customer_id=customer.customer_id,
+                sender_type="agent",
+                message_type="text",
+                content=clarify_msg,
+            )
+            emit(
+                f"🟡 [Orchestrator] Asking buyer to clarify '{search_term}' — "
+                f"{len(candidates)} candidates offered"
+            )
+            return clarify_msg
 
     # For text messages: if no delivery address (or too vague), ask for it before proceeding
     import json as _json_addr
@@ -1475,11 +2115,12 @@ async def handle_incoming_message(
     address_order = await supabase_service.get_address_pending_order(customer.customer_id)
     restock_order = await supabase_service.get_restock_pending_order(customer.customer_id)
     repeat_order = await supabase_service.get_repeat_pending_order(customer.customer_id)
+    clarification_order = await supabase_service.get_product_clarification_order(customer.customer_id)
     sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
-    
+
     # If any active order has the human review flag set, stop the AI here.
-    review_order = next((o for o in [address_order, restock_order, repeat_order, sub_order, pending_order] 
+    review_order = next((o for o in [address_order, restock_order, repeat_order, clarification_order, sub_order, pending_order]
                         if o and o.requires_human_review), None)
 
     # Resolve the message text early so we can inspect it for routing decisions
@@ -1520,7 +2161,8 @@ async def handle_incoming_message(
     _is_confirm_reply = _is_confirmation(raw_text) is not None  # True/False = YES/NO, not None
 
     for _order, _label in [
-        (review_order, "review"), (address_order, "address"), (restock_order, "restock"), (repeat_order, "repeat"),
+        (review_order, "review"), (address_order, "address"), (restock_order, "restock"),
+        (repeat_order, "repeat"), (clarification_order, "clarification"),
         (sub_order, "substitution"), (pending_order, "confirmation"),
     ]:
         if not _order:
@@ -1540,6 +2182,7 @@ async def handle_incoming_message(
             if _order is address_order: address_order = None
             if _order is restock_order: restock_order = None
             if _order is repeat_order: repeat_order = None
+            if _order is clarification_order: clarification_order = None
             if _order is sub_order: sub_order = None
             if _order is pending_order: pending_order = None
 
@@ -1566,6 +2209,9 @@ async def handle_incoming_message(
     elif repeat_order:
         emit(f"📋 [State] Awaiting repeat order clarification — order {repeat_order.order_id[:8]}...")
         final = await _handle_repeat_order_reply(raw_text, repeat_order, customer, merchant_id)
+    elif clarification_order:
+        emit(f"📋 [State] Awaiting product clarification reply — order {clarification_order.order_id[:8]}...")
+        final = await _handle_product_clarification_reply(raw_text, clarification_order, customer, merchant_id)
     elif sub_order:
         emit(f"📋 [State] Awaiting substitution reply — order {sub_order.order_id[:8]}...")
         final = await _handle_substitution_reply(raw_text, sub_order, customer)

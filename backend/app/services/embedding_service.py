@@ -32,3 +32,8 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
     model = _get_model()
     embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=True)
     return [e.tolist() for e in embeddings]
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two normalised vectors (dot product suffices)."""
+    return float(sum(x * y for x, y in zip(a, b)))
