@@ -13,12 +13,20 @@ from app.config import get_settings
 from app.models.schemas import DashboardStats, OrderStatus
 from app.services import supabase_service, twilio_service
 from pydantic import BaseModel
+
+
 class ResolveOrderRequest(BaseModel):
     order_id: str
     amount: float
     status: str
     notes: str
     merchant_id: str
+
+
+class PaymentConfirmRequest(BaseModel):
+    order_id: str
+    reference: str = "TNG_DEMO"
+    method: str = "Touch 'n Go eWallet"
 
 
 logger = logging.getLogger(__name__)
@@ -360,11 +368,84 @@ async def override_order(order_id: str, body: OverrideRequest):
                 content=msg
             )
 
-    # 🔴 ADD THIS RETURN
     return {
-        "success": True, 
-        "order_id": order_id, 
-        "new_status": body.status, 
-        "message": msg, 
+        "success": True,
+        "order_id": order_id,
+        "new_status": body.status,
+        "message": msg,
         "log": log_entry
+    }
+
+
+@dashboard_router.post("/payment/confirm")
+async def confirm_payment(body: PaymentConfirmRequest):
+    """Called by the mock TNG payment page after buyer completes payment."""
+    order = await supabase_service.get_order_by_id(body.order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    try:
+        notes = json.loads(order.get("order_notes") or "{}")
+    except Exception:
+        notes = {}
+
+    inventory_data = notes.get("inventory_result", {})
+    delivery_address = notes.get("delivery_address", "")
+    language = notes.get("language", "mixed")
+
+    # Mark as confirmed with payment details
+    await supabase_service.update_order_status(
+        body.order_id,
+        OrderStatus.CONFIRMED,
+        payment_reference=body.reference,
+        payment_method=body.method,
+    )
+
+    # Build a minimal OrderRow and InventoryResult to pass to logistics
+    from app.models.schemas import OrderRow, InventoryResult, ResolvedOrderItem
+    order_row = OrderRow(
+        order_id=order["order_id"],
+        customer_id=order["customer_id"],
+        merchant_id=order["merchant_id"],
+        order_amount=order.get("order_amount"),
+        order_status=OrderStatus.CONFIRMED,
+        order_notes=order.get("order_notes"),
+        confidence_score=order.get("confidence_score"),
+        requires_human_review=False,
+    )
+    try:
+        inv_result = InventoryResult(**inventory_data)
+    except Exception:
+        inv_result = InventoryResult(
+            order_feasible=True, items=[], total_amount=0,
+            grand_total=order.get("order_amount") or 0,
+            quote_message="", delivery_fee=15.0,
+        )
+
+    # Explicitly deduct stock for each confirmed item — don't rely solely on the LLM
+    for item in inv_result.items:
+        if item.product_id and item.fulfilled_qty > 0:
+            deducted = await supabase_service.deduct_stock(item.product_id, item.fulfilled_qty)
+            if not deducted:
+                logger.warning("Stock deduction failed for product %s qty %d", item.product_id, item.fulfilled_qty)
+
+    from app.agents.logistics_agent import run_logistics_agent
+    logistics = await run_logistics_agent(order_row, inv_result, delivery_address, language)
+
+    confirmation_msg = logistics.confirmation_message
+
+    await supabase_service.log_message(
+        customer_id=order["customer_id"],
+        order_id=body.order_id,
+        sender_type="agent",
+        message_type="text",
+        content=confirmation_msg,
+    )
+
+    logger.info("Payment confirmed for order %s via %s — ref %s", body.order_id[:8], body.method, body.reference)
+    return {
+        "success": True,
+        "tracking_url": logistics.tracking_url,
+        "eta_minutes": logistics.eta_minutes,
+        "confirmation_message": confirmation_msg,
     }

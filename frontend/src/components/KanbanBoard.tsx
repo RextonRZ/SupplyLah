@@ -13,6 +13,7 @@ const COL_META: Record<string, { accent: string; label: string }> = {
   "Pending":               { accent: "bg-amber-400",  label: "Pending" },
   "Awaiting Substitution": { accent: "bg-orange-400", label: "Subst." },
   "Awaiting Confirmation": { accent: "bg-blue-500",   label: "Confirming" },
+  "Awaiting Payment":      { accent: "bg-amber-500",  label: "💳 Payment" },
   "Confirmed":             { accent: "bg-teal-500",   label: "Confirmed" },
   "Dispatched":            { accent: "bg-violet-500", label: "Dispatched" },
 };

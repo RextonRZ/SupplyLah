@@ -2,6 +2,7 @@ export type OrderStatus =
   | "Pending"
   | "Awaiting Substitution"
   | "Awaiting Confirmation"
+  | "Awaiting Payment"
   | "Confirmed"
   | "Dispatched"
   | "Failed"
@@ -25,6 +26,8 @@ export interface Order {
   confidence_score: number | null;
   requires_human_review: boolean;
   confirmed_at: string | null;
+  payment_reference: string | null;
+  payment_method: string | null;
   created_at: string;
   updated_at: string;
   customer?: {
@@ -60,6 +63,7 @@ export const STATUS_COLORS: Record<OrderStatus, string> = {
   Pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
   "Awaiting Substitution": "bg-orange-100 text-orange-800 border-orange-200",
   "Awaiting Confirmation": "bg-blue-100 text-blue-800 border-blue-200",
+  "Awaiting Payment": "bg-amber-100 text-amber-800 border-amber-300",
   Confirmed: "bg-green-100 text-green-800 border-green-200",
   Dispatched: "bg-purple-100 text-purple-800 border-purple-200",
   Failed: "bg-red-100 text-red-800 border-red-200",
@@ -70,6 +74,7 @@ export const KANBAN_COLUMNS: OrderStatus[] = [
   "Pending",
   "Awaiting Substitution",
   "Awaiting Confirmation",
+  "Awaiting Payment",
   "Confirmed",
   "Dispatched",
 ];

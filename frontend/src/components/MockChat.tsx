@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { supabase, BACKEND_URL } from "@/lib/supabase";
 
 export interface ChatMessage {
@@ -65,6 +65,340 @@ function logToHint(log: string): string | null {
 
 
 const URL_RE = /(https?:\/\/[^\s]+)/g;
+const PAYMENT_MARKER_RE = /\[PAYMENT:([^:]+):([^:]+):([^\]]+)\]/;
+const TNG_URL_RE = /(https?:\/\/[^\s]*\/pay\/tng[^\s]*)/;
+
+type TngStep = "redirect" | "phone" | "confirm" | "notif" | "approve" | "success";
+interface TngData { orderId: string; amount: string; merchant: string }
+
+function TngOverlay({ data, onDone }: {
+  data: TngData;
+  onDone: (ref: string, trackUrl: string, confMsg: string) => void;
+}) {
+  const [step, setStep]     = React.useState<TngStep>("redirect");
+  const [phone, setPhone]   = React.useState("0123456789");
+  const [pin, setPin]       = React.useState("");
+  const [pinErr, setPinErr] = React.useState(false);
+  const [busy, setBusy]     = React.useState(false);
+  const [payRef, setPayRef]       = React.useState("");
+  const [trackUrl, setTrackUrl]   = React.useState("");
+  const [confMsg, setConfMsg]     = React.useState("");
+  const [payDate]                 = React.useState(new Date().toLocaleString("en-MY"));
+
+  React.useEffect(() => {
+    if (step !== "redirect") return;
+    const t = setTimeout(() => setStep("phone"), 1800);
+    return () => clearTimeout(t);
+  }, [step]);
+
+  async function pay() {
+    setBusy(true);
+    const ref = `TNG${Date.now().toString().slice(-8)}`;
+    setPayRef(ref);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/payment/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: data.orderId, reference: ref, method: "Touch 'n Go eWallet" }),
+      });
+      const d = await res.json();
+      if (d.tracking_url) setTrackUrl(d.tracking_url);
+      if (d.confirmation_message) setConfMsg(d.confirmation_message);
+    } catch { /* demo */ }
+    setBusy(false);
+    setStep("notif");
+  }
+
+  const TNG_BLUE = "#005EB8";
+  const merchant = decodeURIComponent(data.merchant);
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-white">
+      {/* Status bar always visible on top */}
+      <img src="/status-bar.png" alt="" className="absolute top-0 left-0 w-full h-12 object-fill z-10 pointer-events-none" />
+
+      {/* ── Redirect ──────────────────────────────────────────────── */}
+      {step === "redirect" && (
+        <div className="flex-1 flex flex-col items-center justify-center bg-white pt-12">
+          <p className="text-[11px] text-gray-400">Please wait to be redirected...</p>
+          <div className="mt-3 flex gap-1.5">
+            {[0,1,2].map(i => <span key={i} className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: `${i*150}ms` }} />)}
+          </div>
+          <p className="absolute bottom-4 text-[9px] text-gray-300">© 2024, Wavv Biz. All rights reserved.</p>
+        </div>
+      )}
+
+      {/* ── Phone + PIN (img2 style) ───────────────────────────────── */}
+      {step === "phone" && (
+        <div className="flex flex-col flex-1 pt-12">
+          {/* Gradient header */}
+          <div className="px-4 pt-4 pb-6 text-white" style={{ background: "linear-gradient(145deg,#0047AB 0%,#1565C0 40%,#42A5F5 100%)" }}>
+            <img src="/tnglogo.png" alt="TNG" className="w-14 h-14 object-contain mb-3"
+              onError={e => {
+                const el = e.target as HTMLImageElement;
+                el.style.display = "none";
+                const fb = document.createElement("div");
+                fb.className = "w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center mb-3";
+                fb.innerHTML = `<span style="color:white;font-size:10px;font-weight:900">TNG</span>`;
+                el.parentNode?.insertBefore(fb, el);
+              }}
+            />
+            <p className="text-[11px] opacity-80">Payment to {merchant}</p>
+            <p className="text-3xl font-extrabold mt-0.5">RM<span className="font-black">{data.amount}</span></p>
+          </div>
+
+          {/* Form body */}
+          <div className="flex-1 bg-white px-5 pt-5 pb-4 flex flex-col">
+            <p className="text-sm font-semibold text-gray-800 mb-4">Log In</p>
+
+            {/* Phone field */}
+            <div className="border-b border-gray-300 flex items-center mb-5 pb-1 gap-2">
+              <button className="flex items-center gap-1 shrink-0 text-sm text-gray-700">
+                MY +60
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <div className="w-px h-4 bg-gray-300 shrink-0" />
+              <input
+                className="flex-1 text-sm outline-none bg-transparent placeholder-gray-400"
+                placeholder="Mobile Number"
+                value={phone.replace(/^0/, "")}
+                onChange={e => setPhone("0" + e.target.value.replace(/\D/g, ""))}
+                inputMode="numeric"
+                maxLength={10}
+              />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16" strokeWidth="3"/></svg>
+            </div>
+
+            {/* 6-digit PIN */}
+            <p className="text-xs text-gray-600 mb-3">6-digit PIN</p>
+            <div className="flex gap-2 mb-1">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex-1 h-11 border-b-2 border-gray-300 flex items-center justify-center">
+                  {pin.length > i && <span className="w-2.5 h-2.5 rounded-full bg-gray-800 block" />}
+                </div>
+              ))}
+            </div>
+            {/* Hidden real input to capture PIN */}
+            <input
+              type="tel"
+              inputMode="numeric"
+              maxLength={6}
+              value={pin}
+              onChange={e => { setPin(e.target.value.replace(/\D/g, "").slice(0, 6)); setPinErr(false); }}
+              className="opacity-0 h-0 w-0 absolute"
+              id="tng-pin-input"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={() => document.getElementById("tng-pin-input")?.focus()}
+              className="text-[10px] text-blue-600 text-center mb-2"
+            >
+              Tap here to enter PIN
+            </button>
+            {pinErr && <p className="text-red-500 text-[10px] text-center mb-1">Wrong PIN. Use <strong>123456</strong>.</p>}
+
+            <div className="mt-auto">
+              <button
+                onClick={() => {
+                  if (pin !== "123456") { setPinErr(true); return; }
+                  setStep("confirm");
+                }}
+                disabled={phone.length < 10 || pin.length < 6}
+                className="w-full py-3 rounded-full text-sm font-semibold transition-colors disabled:bg-gray-200 disabled:text-gray-400"
+                style={phone.length >= 10 && pin.length >= 6 ? { background: TNG_BLUE, color: "#fff" } : {}}
+              >
+                Log In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirm (also shown as background for notif step) ────────── */}
+      {(step === "confirm" || step === "notif") && (
+        <div className={`flex flex-col flex-1 pt-12 relative ${step === "notif" ? "pointer-events-none" : ""}`}>
+          <div className="text-white px-4 py-3 flex items-center gap-2" style={{ background: TNG_BLUE }}>
+            <img src="/tnglogo.png" alt="" className="w-7 h-7 object-contain rounded-lg bg-white/20 p-0.5"
+              onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            <div>
+              <p className="text-[9px] opacity-75">Payment to</p>
+              <p className="text-xs font-bold leading-tight">{merchant}</p>
+            </div>
+          </div>
+          <div className="flex-1 bg-gray-100 overflow-y-auto">
+            <div className="bg-white mx-3 my-3 rounded-2xl shadow-sm overflow-hidden divide-y divide-gray-100">
+              <div className="px-4 py-4">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-2">Payment Due</p>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-xs text-gray-600">Mobile Top Up</p>
+                    <p className="text-[10px] text-gray-400">MY ID – {phone.slice(0,4)}****{phone.slice(-3)}</p>
+                  </div>
+                  <p className="text-sm font-bold">RM {data.amount}</p>
+                </div>
+              </div>
+              {[["Amount", `RM ${data.amount}`], ["Merchant", merchant]].map(([k,v]) => (
+                <div key={k} className="flex justify-between px-4 py-3 text-xs">
+                  <span className="text-gray-500">{k}</span>
+                  <span className="font-semibold text-right max-w-[55%] truncate">{v}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mx-3 mb-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2 flex items-start gap-2">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" className="mt-0.5 shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
+              <p className="text-[10px] text-green-700">As per regulations, you receive a TNG eWallet receipt for this transaction.</p>
+            </div>
+          </div>
+          <div className="bg-white px-4 py-3 border-t border-gray-100">
+            <button onClick={pay} disabled={busy}
+              className="w-full py-3 rounded-full text-white text-sm font-semibold flex items-center justify-center gap-2"
+              style={{ background: TNG_BLUE }}
+            >
+              {busy && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {busy ? "Processing..." : "Pay"}
+            </button>
+          </div>
+
+          {/* Notification overlay — sits on top of confirm screen */}
+          {step === "notif" && (
+            <div className="absolute inset-0 bg-black/40 flex flex-col pointer-events-auto z-10" style={{ paddingTop: 48 }}>
+              <button
+                onClick={() => setStep("approve")}
+                className="mx-2 mt-2 px-3 py-2.5 rounded-2xl flex items-center gap-2.5 text-left shadow-2xl"
+                style={{ background: "rgba(28,28,28,0.95)" }}
+              >
+                <img src="/tnglogo.png" alt="" className="w-8 h-8 rounded-xl object-contain shrink-0 p-0.5"
+                  onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline">
+                    <p className="text-white text-[10px] font-semibold">Transaction Approval</p>
+                    <p className="text-gray-400 text-[8px] shrink-0 ml-2">now</p>
+                  </div>
+                  <p className="text-gray-300 text-[10px] leading-tight truncate">
+                    Approve <strong className="text-white">RM {data.amount}</strong> to {merchant}?
+                  </p>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Approve ───────────────────────────────────────────────── */}
+      {step === "approve" && (
+        <div className="flex flex-col flex-1 pt-12">
+          <div className="text-white px-4 py-3 flex items-center gap-2" style={{ background: TNG_BLUE }}>
+            <img src="/tnglogo.png" alt="" className="w-6 h-6 rounded-lg object-contain"
+              onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            <p className="text-xs font-bold">Touch 'n Go eWallet</p>
+          </div>
+          <div className="flex-1 bg-gray-50 px-4 py-5 flex flex-col gap-4">
+            <p className="text-sm font-semibold text-gray-800 text-center">Please confirm to perform this action</p>
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 divide-y divide-gray-100 text-xs">
+              {[["Transaction","Online Purchase"],["Amount",`RM ${data.amount}`],["Merchant",merchant]].map(([k,v]) => (
+                <div key={k} className="flex justify-between px-4 py-3">
+                  <span className="text-gray-500">{k}</span>
+                  <span className="font-semibold text-right max-w-[55%] truncate">{v}</span>
+                </div>
+              ))}
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 flex items-start gap-2">
+              <div className="w-4 h-4 rounded-full bg-red-500 flex items-center justify-center shrink-0 mt-0.5">
+                <span className="text-white text-[9px] font-bold">!</span>
+              </div>
+              <p className="text-[10px] text-red-700"><strong>Beware of cybersecurity messages.</strong> Do not approve if you did not perform this action.</p>
+            </div>
+            <p className="text-[9px] text-gray-400 text-center">Tap "Report" if you did not perform this action</p>
+            <div className="flex gap-3 mt-auto">
+              <button onClick={() => onDone("", "", "")} className="flex-1 py-3 border border-gray-300 rounded-full text-sm font-semibold text-gray-600">Report</button>
+              <button onClick={() => setStep("success")} className="flex-1 py-3 rounded-full text-sm font-semibold text-white" style={{ background: TNG_BLUE }}>Approve</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Success (img3 style) ──────────────────────────────────── */}
+      {step === "success" && (
+        <div className="flex flex-col flex-1 pt-12">
+          <div className="text-white px-4 py-3 text-center font-semibold text-sm" style={{ background: TNG_BLUE }}>
+            Payment Result
+          </div>
+          <div className="flex-1 bg-white flex flex-col items-center px-5 pt-8 pb-6 gap-3">
+            <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <p className="text-3xl font-extrabold text-gray-900">RM {data.amount}</p>
+            <p className="text-sm text-gray-400 -mt-2">Paid</p>
+
+            <div className="w-full border border-gray-200 rounded-xl divide-y divide-gray-100 text-xs mt-2">
+              {[
+                ["Merchant", merchant],
+                ["Date & Time", payDate],
+                ["eWallet Reference No.", payRef || `20231026${Date.now().toString().slice(-12)}`],
+                ["Payment Method", "eWallet Balance"],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between px-4 py-2.5 gap-2">
+                  <span className="text-gray-400 shrink-0">{k}</span>
+                  <span className="font-semibold text-right text-gray-800 break-all">{v}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-auto w-full">
+              <button
+                onClick={() => onDone(payRef, trackUrl, confMsg)}
+                className="w-full py-3 rounded-full text-white text-sm font-semibold"
+                style={{ background: TNG_BLUE }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PaymentCard({ text, onTngPay }: { text: string; onTngPay: (d: TngData) => void }) {
+  const markerMatch = text.match(PAYMENT_MARKER_RE);
+  const amount   = markerMatch?.[2] ?? "0.00";
+  const orderId  = markerMatch?.[1] ?? "";
+  const merchant = markerMatch?.[3] ?? "Demo+Wholesaler+Sdn+Bhd";
+
+  const cleanText = text
+    .replace(PAYMENT_MARKER_RE, "")
+    .replace(TNG_URL_RE, "")
+    .replace(/📱[^\n]*\n?/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return (
+    <div className="space-y-2.5">
+      <WhatsAppText text={cleanText} />
+      <div className="space-y-1.5">
+        <button disabled className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 opacity-40 cursor-not-allowed text-left">
+          <span>🏦</span>
+          <div><p className="text-xs font-semibold text-slate-700">Online Banking</p><p className="text-[10px] text-slate-400">Maybank · CIMB · RHB</p></div>
+        </button>
+        <button
+          onClick={() => onTngPay({ orderId, amount, merchant })}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border-2 text-left transition-colors"
+          style={{ borderColor: "#005EB8", background: "#005EB8" }}
+        >
+          <span>📱</span>
+          <div className="flex-1"><p className="text-xs font-bold text-white">Touch 'n Go eWallet</p><p className="text-[10px] text-blue-200">Tap to pay RM {amount}</p></div>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M7 17L17 7M7 7h10v10"/></svg>
+        </button>
+        <button disabled className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 opacity-40 cursor-not-allowed text-left">
+          <span>💳</span>
+          <div><p className="text-xs font-semibold text-slate-700">Credit / Debit Card</p><p className="text-[10px] text-slate-400">Visa · Mastercard</p></div>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function WhatsAppText({ text }: { text: string }) {
   function parseLine(line: string): React.ReactNode {
@@ -173,6 +507,7 @@ export default function MockChat({
   const sseShown = useRef<Set<string>>(new Set());
   const nameSynced = useRef(false);
   const [selectedImage, setSelectedImage] = useState<{ dataUrl: string; base64: string; type: string } | null>(null);
+  const [tngPayment, setTngPayment] = useState<TngData | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -490,7 +825,36 @@ export default function MockChat({
   }
 
   return (
-    <div className="bg-white flex flex-col h-full overflow-hidden">
+    <div className="bg-white flex flex-col h-full overflow-hidden relative">
+      {/* TNG Payment Overlay */}
+      {tngPayment && (
+        <TngOverlay
+          data={tngPayment}
+          onDone={(ref: string, _trackUrl: string, confMsg: string) => {
+            setTngPayment(null);
+            if (!ref) return;
+            // img2: ack appears first
+            setTimeout(() => {
+              setMessages(prev => [...prev, {
+                role: "agent",
+                text: "✅ Dapat! Tengah sahkan pesanan dan atur penghantaran... Kejap lagi dapat konfirmasi dengan tracking! 🚚\n/ ✅ Got it! Confirming your order and arranging delivery... You'll get tracking info shortly!",
+                time: now(),
+              }]);
+            }, 2000);
+            // img3: logistics confirmation a few seconds later (fallback if backend didn't return one)
+            const logistics = confMsg || (
+              "🎉 Pesanan anda telah disahkan!\n\n" +
+              "📦 Barang sedang disediakan untuk penghantaran.\n" +
+              "🚚 Pemandu Lalamove akan tiba dalam ~45 minit.\n" +
+              "🔗 Jejak penghantaran anda:\nhttps://web.lalamove.com/tracking/LAL-" + ref.slice(-8) + "\n\n" +
+              "Terima kasih kerana membeli dengan SupplyLah! 😊"
+            );
+            setTimeout(() => {
+              setMessages(prev => [...prev, { role: "agent", text: logistics, time: now() }]);
+            }, 5500);
+          }}
+        />
+      )}
       {/* Header with Mode Switcher */}
       <div className="bg-[#075E54] text-white px-5 h-24 py-4 items-end gap-3 flex justify-between relative">
         <img
@@ -545,6 +909,8 @@ export default function MockChat({
                   <img src={m.imageDataUrl} alt="order list" className="rounded-lg max-w-[200px] max-h-[200px] object-cover" />
                   {m.text && <WhatsAppText text={m.text} />}
                 </div>
+              ) : PAYMENT_MARKER_RE.test(m.text ?? "") ? (
+                <PaymentCard text={m.text ?? ""} onTngPay={setTngPayment} />
               ) : (
                 <WhatsAppText text={m.text ?? ""} />
               )}

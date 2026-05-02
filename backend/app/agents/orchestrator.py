@@ -197,6 +197,91 @@ def _build_substitution_question(lang: str, sub_items: list[ResolvedOrderItem]) 
         return "\n".join(lines)
 
 
+def _build_payment_request_message(lang: str, amount: float, order_id: str = "", merchant: str = "Demo Wholesaler Sdn Bhd") -> str:
+    """Build the payment instruction message shown after buyer confirms the quote.
+
+    Embeds a TNG payment URL so MockChat can render interactive payment buttons.
+    Marker format: [PAYMENT:order_id:amount:merchant] — stripped by the renderer.
+    """
+    from app.config import get_settings as _gs
+    frontend_url = _gs().frontend_url.rstrip("/")
+    import urllib.parse as _up
+    tng_url = (
+        f"{frontend_url}/pay/tng"
+        f"?order={_up.quote(order_id)}"
+        f"&amount={amount:.2f}"
+        f"&merchant={_up.quote(merchant)}"
+    )
+    marker = f"[PAYMENT:{order_id}:{amount:.2f}:{_up.quote(merchant)}]"
+
+    if lang == "ms":
+        return (
+            f"✅ Pesanan anda telah disahkan!\n\n"
+            f"Jumlah bayaran: *RM{amount:.2f}*\n\n"
+            f"Sila pilih kaedah pembayaran:\n\n"
+            f"🏦 Online Banking\n"
+            f"📱 Touch 'n Go eWallet → {tng_url}\n"
+            f"💳 Kredit / Debit Kad\n\n"
+            f"──────────────────\n"
+            f"Atau taip *COD* untuk bayar tunai semasa penghantaran.\n"
+            f"{marker}"
+        )
+    return (
+        f"✅ Order confirmed!\n\n"
+        f"Amount due: *RM{amount:.2f}*\n\n"
+        f"Please choose your payment method:\n\n"
+        f"🏦 Online Banking\n"
+        f"📱 Touch 'n Go eWallet → {tng_url}\n"
+        f"💳 Credit / Debit Card\n\n"
+        f"──────────────────\n"
+        f"Or type *COD* to pay cash on delivery.\n"
+        f"{marker}"
+    )
+
+
+import re as _re_pay
+_REF_RE = _re_pay.compile(r'\b[A-Za-z0-9]{6,}\b')
+_EWALLET_KW = {"tng", "touch n go", "touchngo", "grabpay", "grab pay", "boost", "duitnow", "ewallet", "e-wallet", "ewalet"}
+_BANKING_KW = {"maybank", "cimb", "rhb", "hlb", "public bank", "bsn", "ambank", "ibg", "ft", "trx", "transfer", "ref", "rujukan", "resit", "receipt"}
+_COD_KW = {"cod", "cash", "tunai", "cash on delivery", "bayar semasa", "hantar dulu"}
+_CARD_KW = {"card", "kad", "kredit", "debit", "credit"}
+_CANCEL_KW = {"cancel", "batal", "tak nak", "tak jadi", "no", "tidak"}
+
+
+def _verify_payment(text: str, message_type) -> tuple:
+    """Returns (status, payment_method, payment_reference).
+
+    status: 'approved' | 'cancelled' | 'card_link' | 'invalid'
+    """
+    from datetime import datetime as _dt
+    t = text.strip().lower()
+
+    if message_type and hasattr(message_type, 'value') and message_type.value == "image":
+        ts = _dt.now().strftime("%Y%m%d%H%M%S")
+        return "approved", "Screenshot / E-Wallet", f"IMG{ts}"
+
+    if any(k in t for k in _CANCEL_KW):
+        return "cancelled", "", ""
+
+    if any(k in t for k in _CARD_KW):
+        return "card_link", "Credit/Debit Card", ""
+
+    if any(k in t for k in _COD_KW):
+        return "approved", "Cash on Delivery (COD)", "COD"
+
+    method = "Online Banking"
+    if any(k in t for k in _EWALLET_KW):
+        method = "E-Wallet"
+    elif any(k in t for k in _BANKING_KW):
+        method = "Online Banking"
+
+    ref_match = _REF_RE.search(text)
+    if ref_match:
+        return "approved", method, ref_match.group(0).upper()
+
+    return "invalid", "", ""
+
+
 def _build_quote_message(lang: str, inv: InventoryResult) -> str:
     """Build the order summary message without a second LLM call."""
     lines = []
@@ -2042,55 +2127,166 @@ async def _handle_confirmation_reply(
             quote_message="", delivery_fee=15.0,
         )
 
-    await supabase_service.update_order_status(pending_order.order_id, OrderStatus.CONFIRMED)
+    # Gate on payment — save state, send payment instructions, wait for proof
+    amount = pending_order.order_amount or inv_result.grand_total or 0.0
+    payment_msg = _build_payment_request_message(language, amount, order_id=pending_order.order_id)
 
-    ack = (
-        "✅ Dapat! Tengah sahkan pesanan dan atur penghantaran... "
-        "Kejap lagi dapat konfirmasi dengan tracking! 🚚\n"
-        "/ ✅ Got it! Confirming your order and arranging delivery... "
-        "You'll get tracking info shortly!"
+    await supabase_service.update_order_status(
+        pending_order.order_id,
+        OrderStatus.AWAITING_PAYMENT,
+        order_notes=_json.dumps({
+            "inventory_result": inventory_data,
+            "delivery_address": delivery_address,
+            "language": language,
+            "payment_tries": 0,
+        }),
     )
     await supabase_service.log_message(
         customer_id=customer.customer_id,
         order_id=pending_order.order_id,
         sender_type="agent",
         message_type="text",
-        content=ack,
+        content=payment_msg,
+    )
+    emit("💳 [Payment] Order moved to Awaiting Payment — sent payment instructions to buyer")
+    return payment_msg
+
+
+async def _handle_payment_reply(
+    text: str,
+    payment_order: OrderRow,
+    customer: CustomerRow,
+    message_type,
+) -> str:
+    """Verify buyer's payment proof and trigger Lalamove on success."""
+    import json as _jpay
+
+    try:
+        notes = _jpay.loads(payment_order.order_notes or "{}")
+    except Exception:
+        notes = {}
+
+    language = notes.get("language", "mixed")
+    inventory_data = notes.get("inventory_result", {})
+    delivery_address = notes.get("delivery_address", "") or customer.delivery_address or ""
+    tries: int = notes.get("payment_tries", 0) + 1
+
+    from app.models.schemas import InventoryResult as _IR
+    try:
+        inv_result = _IR(**inventory_data)
+    except Exception:
+        inv_result = _IR(order_feasible=True, items=[], total_amount=0,
+                         grand_total=payment_order.order_amount or 0, quote_message="", delivery_fee=15.0)
+
+    status, method, reference = _verify_payment(text, message_type)
+
+    # ── Cancelled ──────────────────────────────────────────────────────────
+    if status == "cancelled":
+        await supabase_service.update_order_status(payment_order.order_id, OrderStatus.EXPIRED)
+        await supabase_service.log_message(
+            customer_id=customer.customer_id, order_id=payment_order.order_id,
+            sender_type="agent", message_type="text",
+            content="Pesanan dibatalkan. / Order cancelled.",
+        )
+        emit("❌ [Payment] Buyer cancelled order")
+        return ("Pesanan dibatalkan. Boleh buat pesanan baru bila-bila masa! 😊 "
+                "/ Order cancelled. Feel free to order again anytime! 😊")
+
+    # ── Card link request (mock) ───────────────────────────────────────────
+    if status == "card_link":
+        card_msg = (
+            "💳 Pautan pembayaran kad:\nhttps://pay.supplylah.demo/checkout/DEMO-LINK\n\n"
+            "Sila lengkapkan pembayaran dan hantar nombor rujukan transaksi. / "
+            "Please complete payment and send the transaction reference number."
+        ) if language == "ms" else (
+            "💳 Card payment link:\nhttps://pay.supplylah.demo/checkout/DEMO-LINK\n\n"
+            "Complete payment and send back your transaction reference number."
+        )
+        notes["payment_tries"] = tries
+        await supabase_service.update_order_status(
+            payment_order.order_id, OrderStatus.AWAITING_PAYMENT,
+            order_notes=_jpay.dumps(notes),
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id, order_id=payment_order.order_id,
+            sender_type="agent", message_type="text", content=card_msg,
+        )
+        emit("💳 [Payment] Sent mock card payment link to buyer")
+        return card_msg
+
+    # ── Invalid — ask again (max 3 tries) ─────────────────────────────────
+    if status == "invalid":
+        if tries >= 3:
+            await supabase_service.update_order_status(payment_order.order_id, OrderStatus.EXPIRED)
+            msg = ("Pesanan tamat masa kerana tiada bukti pembayaran diterima. Hubungi kami untuk bantuan. "
+                   "/ Order expired — no payment received. Please contact us for assistance.")
+            await supabase_service.log_message(
+                customer_id=customer.customer_id, order_id=payment_order.order_id,
+                sender_type="agent", message_type="text", content=msg,
+            )
+            emit(f"⏰ [Payment] Max payment tries reached — order {payment_order.order_id[:8]} expired")
+            return msg
+
+        notes["payment_tries"] = tries
+        await supabase_service.update_order_status(
+            payment_order.order_id, OrderStatus.AWAITING_PAYMENT,
+            order_notes=_jpay.dumps(notes),
+        )
+        retry_msg = (
+            "Maaf, saya tidak dapat mengesahkan pembayaran anda. Sila hantar *nombor rujukan* atau *screenshot resit* 📸 "
+            f"(Cuba {tries}/3)\n/ Sorry, I couldn't verify your payment. Please send your *reference number* or *receipt screenshot* 📸"
+        ) if language == "ms" else (
+            f"Sorry, I couldn't verify your payment. Please send your *reference number* or *receipt screenshot* 📸 (Attempt {tries}/3)"
+        )
+        await supabase_service.log_message(
+            customer_id=customer.customer_id, order_id=payment_order.order_id,
+            sender_type="agent", message_type="text", content=retry_msg,
+        )
+        emit(f"⚠️ [Payment] Invalid proof (attempt {tries}/3) — asking buyer again")
+        return retry_msg
+
+    # ── Approved ───────────────────────────────────────────────────────────
+    emit(f"✅ [Payment] {method} verified — ref: {reference} — triggering logistics")
+
+    await supabase_service.update_order_status(
+        payment_order.order_id, OrderStatus.CONFIRMED,
+        payment_reference=reference,
+        payment_method=method,
+    )
+
+    ack = (
+        f"✅ Pembayaran diterima! ({method} — Ref: {reference})\n"
+        "Tengah atur penghantaran... Kejap lagi dapat tracking! 🚚\n"
+        f"/ ✅ Payment received! ({method} — Ref: {reference})\n"
+        "Arranging delivery now... You'll get your tracking link shortly! 🚚"
+    )
+    await supabase_service.log_message(
+        customer_id=customer.customer_id, order_id=payment_order.order_id,
+        sender_type="agent", message_type="text", content=ack,
     )
     emit_message(ack)
-    emit("🚚 [Logistics] Arranging delivery...")
 
     _collector = _msg_collector.get()
     if _collector is not None:
-        # Add ack to collector FIRST so the frontend shows it before the tracking message
         _collector.append(ack)
-        # Inline: mock-chat — run logistics now so result is in the response
-        logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
+        logistics = await run_logistics_agent(payment_order, inv_result, delivery_address, language)
         await supabase_service.log_message(
-            customer_id=customer.customer_id,
-            order_id=pending_order.order_id,
-            sender_type="agent",
-            message_type="text",
-            content=logistics.confirmation_message,
+            customer_id=customer.customer_id, order_id=payment_order.order_id,
+            sender_type="agent", message_type="text", content=logistics.confirmation_message,
         )
         await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
         emit_message(logistics.confirmation_message)
         _collector.append(logistics.confirmation_message)
     else:
-        # Background: real Twilio path
-        async def _do_logistics():
-            logistics = await run_logistics_agent(pending_order, inv_result, delivery_address, language)
+        async def _do_pay_logistics():
+            logistics = await run_logistics_agent(payment_order, inv_result, delivery_address, language)
             await supabase_service.log_message(
-                customer_id=customer.customer_id,
-                order_id=pending_order.order_id,
-                sender_type="agent",
-                message_type="text",
-                content=logistics.confirmation_message,
+                customer_id=customer.customer_id, order_id=payment_order.order_id,
+                sender_type="agent", message_type="text", content=logistics.confirmation_message,
             )
             await twilio_service.send_whatsapp_message(customer.whatsapp_number, logistics.confirmation_message)
             emit_message(logistics.confirmation_message)
-
-        _inventory_queue.put_nowait(_do_logistics())
+        _inventory_queue.put_nowait(_do_pay_logistics())
         ensure_inventory_worker()
 
     return ack
@@ -2152,9 +2348,10 @@ async def handle_incoming_message(
     clarification_order = await supabase_service.get_product_clarification_order(customer.customer_id)
     sub_order = await supabase_service.get_substitution_pending_order(customer.customer_id)
     pending_order = await supabase_service.get_pending_order(customer.customer_id)
+    payment_order = await supabase_service.get_payment_pending_order(customer.customer_id)
 
     # If any active order has the human review flag set, stop the AI here.
-    review_order = next((o for o in [address_order, restock_order, repeat_order, clarification_order, sub_order, pending_order]
+    review_order = next((o for o in [address_order, restock_order, repeat_order, clarification_order, sub_order, pending_order, payment_order]
                         if o and o.requires_human_review), None)
 
     # Resolve the message text early so we can inspect it for routing decisions
@@ -2194,6 +2391,7 @@ async def handle_incoming_message(
 
     _is_confirm_reply = _is_confirmation(raw_text) is not None  # True/False = YES/NO, not None
     _is_image = message_type == MessageType.IMAGE  # images are always new orders
+    _is_choice_reply = bool(__import__("re").match(r"^\s*[1-9]\s*$", raw_text.strip()))  # "1".."9" = clarification pick
 
     import re as _re_state
     _ADDR_RE = _re_state.compile(
@@ -2208,21 +2406,25 @@ async def handle_incoming_message(
         (review_order, "review"), (address_order, "address"), (restock_order, "restock"),
         (repeat_order, "repeat"), (clarification_order, "clarification"),
         (sub_order, "substitution"), (pending_order, "confirmation"),
+        (payment_order, "payment"),
     ]:
         if not _order:
             continue
         _expire = False
         if _label == "review":
             pass
+        elif _label == "payment":
+            # Payment orders only expire if stale — images/text can be payment proof
+            if _is_stale_dt(_order):
+                emit(f"⏰ [State] Expiring stale payment order {_order.order_id[:8]} (>30 min old)")
+                _expire = True
         elif _is_stale_dt(_order):
             emit(f"⏰ [State] Expiring stale {_label} order {_order.order_id[:8]} (>30 min old)")
             _expire = True
         elif _is_image and _label not in ("review",):
-            # Images are new order submissions — never a reply to existing state
             emit(f"🖼️ [State] Image received — discarding pending {_label} order {_order.order_id[:8]}")
             _expire = True
-        elif _label in ("substitution", "confirmation", "clarification") and not _is_confirm_reply and not _looks_like_address:
-            # Message looks like a new order, not a YES/NO or address — discard the old state
+        elif _label in ("substitution", "confirmation", "clarification") and not _is_confirm_reply and not _looks_like_address and not _is_choice_reply:
             emit(f"🔄 [State] New order detected — discarding pending {_label} order {_order.order_id[:8]}")
             _expire = True
         if _expire:
@@ -2233,6 +2435,7 @@ async def handle_incoming_message(
             if _order is clarification_order: clarification_order = None
             if _order is sub_order: sub_order = None
             if _order is pending_order: pending_order = None
+            if _order is payment_order: payment_order = None
 
     if review_order:
         emit(f"📋 [State] Order {review_order.order_id[:8]} is awaiting human review — locking chat.")
@@ -2263,6 +2466,9 @@ async def handle_incoming_message(
     elif sub_order:
         emit(f"📋 [State] Awaiting substitution reply — order {sub_order.order_id[:8]}...")
         final = await _handle_substitution_reply(raw_text, sub_order, customer)
+    elif payment_order:
+        emit(f"💳 [State] Awaiting payment — order {payment_order.order_id[:8]}...")
+        final = await _handle_payment_reply(raw_text, payment_order, customer, message_type)
     elif pending_order:
         emit(f"📋 [State] Awaiting confirmation reply — order {pending_order.order_id[:8]}...")
         final = await _handle_confirmation_reply(raw_text, pending_order, customer)

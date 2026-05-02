@@ -395,6 +395,23 @@ async def get_inventory(merchant_id: str) -> list[dict]:
     return result.data or []
 
 
+async def get_payment_pending_order(customer_id: str) -> Optional[OrderRow]:
+    """Return the most recent Awaiting Payment order for this customer, if any."""
+    result = (
+        get_supabase()
+        .table("order")
+        .select("*")
+        .eq("customer_id", customer_id)
+        .eq("order_status", OrderStatus.AWAITING_PAYMENT.value)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return OrderRow(**result.data[0])
+    return None
+
+
 async def retrieve_few_shot_examples(query_embedding: list[float], match_count: int = 3) -> list[dict]:
     """Return the most semantically similar few-shot examples for dynamic prompt injection."""
     result = get_supabase().rpc(

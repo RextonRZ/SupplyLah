@@ -79,6 +79,14 @@ export default function OrderCard({ order, onOverride, onSelectOrder }: Props) {
             </p>
           </div>
         )}
+        {order.order_status === "Awaiting Payment" && (
+          <div className="mt-1.5 flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <p className="text-[11px] text-amber-700 font-medium">
+              {order.payment_reference ? `💳 Paid via ${order.payment_method} — Ref: ${order.payment_reference}` : "💳 Awaiting payment proof"}
+            </p>
+          </div>
+        )}
       </div>
 
       {expanded && (

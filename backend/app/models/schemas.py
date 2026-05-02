@@ -17,6 +17,7 @@ class OrderStatus(str, Enum):
     PENDING = "Pending"
     AWAITING_SUBSTITUTION = "Awaiting Substitution"
     AWAITING_CONFIRMATION = "Awaiting Confirmation"
+    AWAITING_PAYMENT = "Awaiting Payment"
     CONFIRMED = "Confirmed"
     DISPATCHED = "Dispatched"
     FAILED = "Failed"
@@ -143,6 +144,8 @@ class OrderRow(BaseModel):
     order_notes: Optional[str] = None
     confidence_score: Optional[float] = None
     requires_human_review: bool = False
+    payment_reference: Optional[str] = None
+    payment_method: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
