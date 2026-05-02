@@ -285,13 +285,14 @@ async def get_product_by_id(product_id: str) -> Optional[ProductRow]:
 
 
 async def deduct_stock(product_id: str, qty: int) -> bool:
-    """Atomically deduct stock. Returns False if insufficient stock."""
-    product = await get_product_by_id(product_id)
-    if not product or product.stock_quantity < qty:
-        return False
-    new_qty = product.stock_quantity - qty
-    get_supabase().table("product").update({"stock_quantity": new_qty}).eq("product_id", product_id).execute()
-    return True
+    """Atomically deduct stock via a single SQL UPDATE with a WHERE guard.
+    Returns False if stock is insufficient or the product does not exist."""
+    result = get_supabase().rpc(
+        "deduct_stock_atomic",
+        {"p_product_id": product_id, "p_qty": qty},
+    ).execute()
+    new_qty = result.data
+    return isinstance(new_qty, int) and new_qty >= 0
 
 
 # ─────────────────────────────────────────
@@ -370,6 +371,15 @@ async def get_inventory(merchant_id: str) -> list[dict]:
         .order("product_name")
         .execute()
     )
+    return result.data or []
+
+
+async def retrieve_few_shot_examples(query_embedding: list[float], match_count: int = 3) -> list[dict]:
+    """Return the most semantically similar few-shot examples for dynamic prompt injection."""
+    result = get_supabase().rpc(
+        "match_few_shot_examples",
+        {"query_embedding": query_embedding, "match_count": match_count},
+    ).execute()
     return result.data or []
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from app.config import get_settings
 from app.models.schemas import IntakeResult, OrderLineItem
 from app.services import supabase_service
+from app.services import embedding_service
 from app.services.glm_client import run_agent_loop
 from app.services.log_stream import emit
 
@@ -48,10 +49,36 @@ async def run_intake_agent(
         ensure_ascii=False,
     )
 
+    # Dynamic few-shot: embed the incoming message and retrieve the 3 most
+    # semantically similar examples from the Mesolitica-grounded dataset.
+    dynamic_examples_block = ""
+    try:
+        emit("🔍 [IntakeAgent] Retrieving similar few-shot examples via pgvector...")
+        query_embedding = embedding_service.embed_text(raw_message)
+        few_shot_hits = await supabase_service.retrieve_few_shot_examples(query_embedding, match_count=3)
+        if few_shot_hits:
+            lines = []
+            for i, hit in enumerate(few_shot_hits, 1):
+                lines.append(
+                    f"[Example {i}]\n"
+                    f"Message: {hit['raw_message']}\n"
+                    f"Parsed: {json.dumps(hit['parsed_output'], ensure_ascii=False)}"
+                )
+            dynamic_examples_block = (
+                "\n\n=== Semantically Similar Order Examples (retrieved from Malaysian dataset) ===\n"
+                + "\n\n".join(lines)
+            )
+            emit(f"✅ [IntakeAgent] Injecting {len(few_shot_hits)} dynamic few-shot examples:")
+            for i, hit in enumerate(few_shot_hits, 1):
+                similarity_pct = round(hit.get("similarity", 0) * 100, 1)
+                emit(f"   #{i} ({similarity_pct}% match): \"{hit['raw_message']}\"")
+    except Exception as exc:
+        logger.warning("Few-shot retrieval failed, proceeding without: %s", exc)
+
     messages = [
         {
             "role": "system",
-            "content": system_prompt + f"\n\nAvailable product catalog:\n{catalog}",
+            "content": system_prompt + dynamic_examples_block + f"\n\nAvailable product catalog:\n{catalog}",
         },
         {
             "role": "user",

@@ -92,7 +92,8 @@ class InventoryResult(BaseModel):
     discount_applied: float = 0.0
     delivery_fee: float = 15.0
     grand_total: float
-    quote_message: str
+    quote_message: str = ""
+    out_of_stock_items: list[str] = Field(default_factory=list)
     requires_substitution: bool = False
     notes: Optional[str] = None
 

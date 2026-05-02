@@ -193,6 +193,15 @@ def _build_quote_message(lang: str, inv: InventoryResult) -> str:
     lines = []
     partial_warnings = []
 
+    # Prepend out-of-stock notices before the order summary
+    if inv.out_of_stock_items:
+        for name in inv.out_of_stock_items:
+            if lang == "ms":
+                lines.append(f"⚠️ Maaf, *{name}* tiada dalam stok buat masa ini dan tidak dapat disertakan dalam pesanan.")
+            else:
+                lines.append(f"⚠️ Sorry, *{name}* is currently out of stock and could not be included in your order.")
+        lines.append("")
+
     if lang == "ms":
         lines.append("Berikut ringkasan pesanan anda:\n")
         for item in inv.items:

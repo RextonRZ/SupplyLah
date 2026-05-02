@@ -20,5 +20,6 @@ aiofiles==24.1.0
 asyncio-throttle==1.0.2
 structlog==24.4.0
 groq==1.2.0
+sentence-transformers>=3.0.0
 ffmpeg
 boto3
