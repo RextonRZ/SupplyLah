@@ -402,7 +402,7 @@ async def confirm_payment(body: PaymentConfirmRequest):
     )
 
     # Build a minimal OrderRow and InventoryResult to pass to logistics
-    from app.models.schemas import OrderRow, InventoryResult, ResolvedOrderItem
+    from app.models.schemas import OrderRow, InventoryResult
     order_row = OrderRow(
         order_id=order["order_id"],
         customer_id=order["customer_id"],
@@ -421,13 +421,6 @@ async def confirm_payment(body: PaymentConfirmRequest):
             grand_total=order.get("order_amount") or 0,
             quote_message="", delivery_fee=15.0,
         )
-
-    # Explicitly deduct stock for each confirmed item — don't rely solely on the LLM
-    for item in inv_result.items:
-        if item.product_id and item.fulfilled_qty > 0:
-            deducted = await supabase_service.deduct_stock(item.product_id, item.fulfilled_qty)
-            if not deducted:
-                logger.warning("Stock deduction failed for product %s qty %d", item.product_id, item.fulfilled_qty)
 
     from app.agents.logistics_agent import run_logistics_agent
     logistics = await run_logistics_agent(order_row, inv_result, delivery_address, language)

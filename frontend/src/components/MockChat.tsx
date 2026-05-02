@@ -75,15 +75,19 @@ function TngOverlay({ data, onDone }: {
   data: TngData;
   onDone: (ref: string, trackUrl: string, confMsg: string) => void;
 }) {
-  const [step, setStep]     = React.useState<TngStep>("redirect");
-  const [phone, setPhone]   = React.useState("0123456789");
-  const [pin, setPin]       = React.useState("");
-  const [pinErr, setPinErr] = React.useState(false);
-  const [busy, setBusy]     = React.useState(false);
-  const [payRef, setPayRef]       = React.useState("");
-  const [trackUrl, setTrackUrl]   = React.useState("");
-  const [confMsg, setConfMsg]     = React.useState("");
-  const [payDate]                 = React.useState(new Date().toLocaleString("en-MY"));
+  const [step, setStep]         = React.useState<TngStep>("redirect");
+  const [transitioning, setTr]  = React.useState(false);
+  const [phone, setPhone]       = React.useState("0123456789");
+  const [pin, setPin]           = React.useState("");
+  const [pinErr, setPinErr]     = React.useState(false);
+  const [payRef, setPayRef]     = React.useState("");
+  const [payDate]               = React.useState(new Date().toLocaleString("en-MY"));
+
+  // Advance to next step with a brief TNG-style loading transition
+  function goTo(next: TngStep, delay = 700) {
+    setTr(true);
+    setTimeout(() => { setStep(next); setTr(false); }, delay);
+  }
 
   React.useEffect(() => {
     if (step !== "redirect") return;
@@ -91,22 +95,12 @@ function TngOverlay({ data, onDone }: {
     return () => clearTimeout(t);
   }, [step]);
 
-  async function pay() {
-    setBusy(true);
+  function pay() {
+    // Only generate a reference — backend is called AFTER Approve+Done so the
+    // dashboard card stays in Awaiting Payment until the buyer actually approves.
     const ref = `TNG${Date.now().toString().slice(-8)}`;
     setPayRef(ref);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/payment/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: data.orderId, reference: ref, method: "Touch 'n Go eWallet" }),
-      });
-      const d = await res.json();
-      if (d.tracking_url) setTrackUrl(d.tracking_url);
-      if (d.confirmation_message) setConfMsg(d.confirmation_message);
-    } catch { /* demo */ }
-    setBusy(false);
-    setStep("notif");
+    goTo("notif", 900);
   }
 
   const TNG_BLUE = "#005EB8";
@@ -116,6 +110,35 @@ function TngOverlay({ data, onDone }: {
     <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-white">
       {/* Status bar always visible on top */}
       <img src="/status-bar.png" alt="" className="absolute top-0 left-0 w-full h-12 object-fill z-10 pointer-events-none" />
+
+      {/* TNG-style loading transition overlay */}
+      {transitioning && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-white" style={{ paddingTop: 48 }}>
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-5" style={{ background: TNG_BLUE }}>
+            <img src="/tnglogo.png" alt="" className="w-12 h-12 object-contain"
+              onError={e => {
+                (e.target as HTMLImageElement).style.display = "none";
+                const fb = (e.target as HTMLImageElement).nextSibling as HTMLElement;
+                if (fb) fb.style.display = "flex";
+              }}
+            />
+            <span className="hidden items-center justify-center text-white text-xs font-black w-12 h-12">TNG</span>
+          </div>
+          {/* Animated progress bar */}
+          <div className="w-32 h-1 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-full rounded-full animate-[tng-progress_0.7s_ease-in-out_forwards]"
+              style={{ background: TNG_BLUE, width: "0%" }}
+            />
+          </div>
+          <style>{`
+            @keyframes tng-progress {
+              0%   { width: 0%; }
+              60%  { width: 80%; }
+              100% { width: 100%; }
+            }
+          `}</style>
+        </div>
+      )}
 
       {/* ── Redirect ──────────────────────────────────────────────── */}
       {step === "redirect" && (
@@ -202,7 +225,7 @@ function TngOverlay({ data, onDone }: {
               <button
                 onClick={() => {
                   if (pin !== "123456") { setPinErr(true); return; }
-                  setStep("confirm");
+                  goTo("confirm");
                 }}
                 disabled={phone.length < 10 || pin.length < 6}
                 className="w-full py-3 rounded-full text-sm font-semibold transition-colors disabled:bg-gray-200 disabled:text-gray-400"
@@ -251,12 +274,11 @@ function TngOverlay({ data, onDone }: {
             </div>
           </div>
           <div className="bg-white px-4 py-3 border-t border-gray-100">
-            <button onClick={pay} disabled={busy}
-              className="w-full py-3 rounded-full text-white text-sm font-semibold flex items-center justify-center gap-2"
+            <button onClick={pay}
+              className="w-full py-3 rounded-full text-white text-sm font-semibold"
               style={{ background: TNG_BLUE }}
             >
-              {busy && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {busy ? "Processing..." : "Pay"}
+              Pay
             </button>
           </div>
 
@@ -264,7 +286,7 @@ function TngOverlay({ data, onDone }: {
           {step === "notif" && (
             <div className="absolute inset-0 bg-black/40 flex flex-col pointer-events-auto z-10" style={{ paddingTop: 48 }}>
               <button
-                onClick={() => setStep("approve")}
+                onClick={() => goTo("approve", 600)}
                 className="mx-2 mt-2 px-3 py-2.5 rounded-2xl flex items-center gap-2.5 text-left shadow-2xl"
                 style={{ background: "rgba(28,28,28,0.95)" }}
               >
@@ -312,7 +334,7 @@ function TngOverlay({ data, onDone }: {
             <p className="text-[9px] text-gray-400 text-center">Tap "Report" if you did not perform this action</p>
             <div className="flex gap-3 mt-auto">
               <button onClick={() => onDone("", "", "")} className="flex-1 py-3 border border-gray-300 rounded-full text-sm font-semibold text-gray-600">Report</button>
-              <button onClick={() => setStep("success")} className="flex-1 py-3 rounded-full text-sm font-semibold text-white" style={{ background: TNG_BLUE }}>Approve</button>
+              <button onClick={() => goTo("success", 800)} className="flex-1 py-3 rounded-full text-sm font-semibold text-white" style={{ background: TNG_BLUE }}>Approve</button>
             </div>
           </div>
         </div>
@@ -347,7 +369,7 @@ function TngOverlay({ data, onDone }: {
 
             <div className="mt-auto w-full">
               <button
-                onClick={() => onDone(payRef, trackUrl, confMsg)}
+                onClick={() => onDone(payRef, "", "")}
                 className="w-full py-3 rounded-full text-white text-sm font-semibold"
                 style={{ background: TNG_BLUE }}
               >
@@ -863,10 +885,12 @@ export default function MockChat({
       {tngPayment && (
         <TngOverlay
           data={tngPayment}
-          onDone={(ref: string, _trackUrl: string, confMsg: string) => {
+          onDone={(ref: string, _t: string, _c: string) => {
+            const orderId = tngPayment!.orderId;
             setTngPayment(null);
-            if (!ref) return;
-            // img2: ack appears first
+            if (!ref) return; // Report button — just close
+
+            // img2: ack message at 2 s
             setTimeout(() => {
               setMessages(prev => [...prev, {
                 role: "agent",
@@ -874,17 +898,31 @@ export default function MockChat({
                 time: now(),
               }]);
             }, 2000);
-            // img3: logistics confirmation a few seconds later (fallback if backend didn't return one)
-            const logistics = confMsg || (
-              "🎉 Pesanan anda telah disahkan!\n\n" +
-              "📦 Barang sedang disediakan untuk penghantaran.\n" +
-              "🚚 Pemandu Lalamove akan tiba dalam ~45 minit.\n" +
-              "🔗 Jejak penghantaran anda:\nhttps://web.lalamove.com/tracking/LAL-" + ref.slice(-8) + "\n\n" +
-              "Terima kasih kerana membeli dengan SupplyLah! 😊"
-            );
-            setTimeout(() => {
-              setMessages(prev => [...prev, { role: "agent", text: logistics, time: now() }]);
-            }, 5500);
+
+            // Call backend NOW (after Approve+Done) — order stays Awaiting Payment until here
+            fetch(`${BACKEND_URL}/api/payment/confirm`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ order_id: orderId, reference: ref, method: "Touch 'n Go eWallet" }),
+            })
+              .then(r => r.json())
+              .then(d => {
+                const confMsg = d.confirmation_message || (
+                  "🎉 Pesanan anda telah disahkan!\n\n📦 Barang sedang disediakan untuk penghantaran.\n🚚 Pemandu Lalamove akan tiba dalam ~45 minit.\n🔗 Jejak penghantaran anda:\nhttps://web.lalamove.com/tracking/LAL-" + ref.slice(-8) + "\n\nTerima kasih kerana membeli dengan SupplyLah! 😊"
+                );
+                setTimeout(() => {
+                  setMessages(prev => [...prev, { role: "agent", text: confMsg, time: now() }]);
+                }, 3500);
+              })
+              .catch(() => {
+                setTimeout(() => {
+                  setMessages(prev => [...prev, {
+                    role: "agent",
+                    text: "🎉 Pesanan anda telah disahkan!\n\n📦 Barang sedang disediakan untuk penghantaran.\n🚚 Pemandu Lalamove akan tiba dalam ~45 minit.\n🔗 Jejak penghantaran anda:\nhttps://web.lalamove.com/tracking/LAL-" + ref.slice(-8) + "\n\nTerima kasih kerana membeli dengan SupplyLah! 😊",
+                    time: now(),
+                  }]);
+                }, 3500);
+              });
           }}
         />
       )}
