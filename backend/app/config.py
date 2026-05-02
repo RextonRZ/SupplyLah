@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
     # Model IDs
-    model_reasoning: str = "gemini-2.0-flash"
-    model_fast: str = "gemini-2.0-flash"
-    model_vision: str = "gemini-2.0-flash"
-    model_asr: str = "gemini-2.0-flash"
+    model_reasoning: str = "gemini-2.5-flash"
+    model_fast: str = "gemini-2.5-flash"
+    model_vision: str = "gemini-2.5-flash"
+    model_asr: str = "gemini-2.5-flash"
 
     # Supabase
     supabase_url: str = "http://localhost:54321"
