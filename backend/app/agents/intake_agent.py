@@ -100,7 +100,7 @@ async def run_intake_agent(
         await asyncio.sleep(0)
         raw_output = await run_agent_loop(
             model=settings.model_reasoning,
-            messages=messages,
+            messages=[dict(m) for m in messages],
             tools=[],
             tool_executors={},
         )

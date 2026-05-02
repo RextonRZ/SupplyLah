@@ -134,9 +134,12 @@ async def run_inventory_agent(
         raw_output = ""
         data = None
         for attempt in range(3):
+            # Deep-copy messages each attempt so run_agent_loop's in-place
+            # mutation (appending assistant turns) doesn't poison the next retry.
+            messages_snapshot = [dict(m) for m in messages]
             raw_output = await run_agent_loop(
                 model=settings.model_reasoning,
-                messages=messages,
+                messages=messages_snapshot,
                 tools=[],
                 tool_executors={},
             )

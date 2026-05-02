@@ -1661,6 +1661,24 @@ async def _handle_new_order(
                 raw_candidates = [first["resolved"]] + raw_candidates[:4]
             # Filter to in-stock only — no point offering out-of-stock options
             candidates = [c for c in raw_candidates if c.stock_quantity > 0]
+
+            # ── Auto-resolve when only one candidate exists ──────────────────
+            # If the vector search returns a single in-stock product, there is no
+            # real ambiguity — promote it directly to the confident list and skip
+            # the clarification question entirely.
+            if len(candidates) == 1:
+                auto = candidates[0]
+                emit(
+                    f"✅ [Resolver] Single candidate for '{search_term}' → "
+                    f"auto-resolved to '{auto.product_name}' (no clarification needed)"
+                )
+                confident.append({
+                    "item": first["item"],
+                    "resolved": auto,
+                    "sim": first["sim"],
+                })
+                ambiguous = ambiguous[1:]  # remove the now-resolved item
+                # If no more ambiguous items fall through to the normal order flow
             if not candidates:
                 # Edge case: all candidates out of stock — fall back to human review
                 await supabase_service.create_order(
@@ -1687,60 +1705,60 @@ async def _handle_new_order(
                 emit(f"🔴 [Orchestrator] All candidates OOS for '{search_term}' — escalated to review")
                 return oos_msg
 
-            clarify_msg = build_ask_message(
-                raw_name=search_term,
-                candidates=candidates,
-                lang=lang,
-                header_variant="ambiguous",
-            )
-
-            # Persist state so the reply is routed back here
-            other_items = [
-                {
-                    "product_name": r["item"].product_name,
-                    "raw_name": r["item"].raw_name,
-                    "quantity": r["item"].quantity,
-                    "unit": r["item"].unit,
-                    "resolved_product_id": r["resolved"].product_id if r["resolved"] else None,
-                }
-                for r in confident + ambiguous[1:]  # already-confirmed + remaining ambiguous
-            ]
-            await supabase_service.create_order(
-                customer_id=customer.customer_id,
-                merchant_id=merchant_id,
-                order_amount=0,
-                order_notes=_json_resolve.dumps({
-                    "product_clarification": True,
-                    "clarification_count": 0,
-                    "pending_item": {
-                        "raw_name": search_term,
-                        "quantity": first["item"].quantity,
-                        "unit": first["item"].unit,
-                    },
-                    "candidates": [
-                        {"product_id": c.product_id, "product_name": c.product_name,
-                         "unit_price": float(c.unit_price), "unit": c.unit}
-                        for c in candidates
-                    ],
-                    "resolved_items": other_items,
-                    "intake_result": intake.model_dump(),
-                    "language": lang,
-                }),
-                confidence_score=intake.confidence,
-                requires_human_review=False,
-                status=OrderStatus.PENDING,
-            )
-            await supabase_service.log_message(
-                customer_id=customer.customer_id,
-                sender_type="agent",
-                message_type="text",
-                content=clarify_msg,
-            )
-            emit(
-                f"🟡 [Orchestrator] Asking buyer to clarify '{search_term}' — "
-                f"{len(candidates)} candidates offered"
-            )
-            return clarify_msg
+            elif len(candidates) > 1:
+                clarify_msg = build_ask_message(
+                    raw_name=search_term,
+                    candidates=candidates,
+                    lang=lang,
+                    header_variant="ambiguous",
+                )
+                # Persist state so the reply is routed back here
+                other_items = [
+                    {
+                        "product_name": r["item"].product_name,
+                        "raw_name": r["item"].raw_name,
+                        "quantity": r["item"].quantity,
+                        "unit": r["item"].unit,
+                        "resolved_product_id": r["resolved"].product_id if r["resolved"] else None,
+                    }
+                    for r in confident + ambiguous[1:]
+                ]
+                await supabase_service.create_order(
+                    customer_id=customer.customer_id,
+                    merchant_id=merchant_id,
+                    order_amount=0,
+                    order_notes=_json_resolve.dumps({
+                        "product_clarification": True,
+                        "clarification_count": 0,
+                        "pending_item": {
+                            "raw_name": search_term,
+                            "quantity": first["item"].quantity,
+                            "unit": first["item"].unit,
+                        },
+                        "candidates": [
+                            {"product_id": c.product_id, "product_name": c.product_name,
+                             "unit_price": float(c.unit_price), "unit": c.unit}
+                            for c in candidates
+                        ],
+                        "resolved_items": other_items,
+                        "intake_result": intake.model_dump(),
+                        "language": lang,
+                    }),
+                    confidence_score=intake.confidence,
+                    requires_human_review=False,
+                    status=OrderStatus.PENDING,
+                )
+                await supabase_service.log_message(
+                    customer_id=customer.customer_id,
+                    sender_type="agent",
+                    message_type="text",
+                    content=clarify_msg,
+                )
+                emit(
+                    f"🟡 [Orchestrator] Asking buyer to clarify '{search_term}' — "
+                    f"{len(candidates)} candidates offered"
+                )
+                return clarify_msg
 
     # For text messages: if no delivery address (or too vague), ask for it before proceeding
     import json as _json_addr
@@ -2175,6 +2193,16 @@ async def handle_incoming_message(
             return False
 
     _is_confirm_reply = _is_confirmation(raw_text) is not None  # True/False = YES/NO, not None
+    _is_image = message_type == MessageType.IMAGE  # images are always new orders
+
+    import re as _re_state
+    _ADDR_RE = _re_state.compile(
+        r'\b(jalan|jln|taman|tmn|lorong|lebuh|persiaran|kampung|kg\b|no\.?\s*\d|blok|apt|flat|unit|'
+        r'penang|pulau pinang|kl|kuala lumpur|selangor|johor|kedah|perak|pahang|melaka|sabah|sarawak|'
+        r'petaling|subang|klang|ipoh|alor setar|kota bharu|kuching|miri|sandakan)\b',
+        _re_state.IGNORECASE,
+    )
+    _looks_like_address = bool(_ADDR_RE.search(raw_text)) and len(raw_text.split()) < 15
 
     for _order, _label in [
         (review_order, "review"), (address_order, "address"), (restock_order, "restock"),
@@ -2189,8 +2217,12 @@ async def handle_incoming_message(
         elif _is_stale_dt(_order):
             emit(f"⏰ [State] Expiring stale {_label} order {_order.order_id[:8]} (>30 min old)")
             _expire = True
-        elif _label in ("substitution", "confirmation") and not _is_confirm_reply:
-            # Message looks like a new order, not a YES/NO — discard the old state
+        elif _is_image and _label not in ("review",):
+            # Images are new order submissions — never a reply to existing state
+            emit(f"🖼️ [State] Image received — discarding pending {_label} order {_order.order_id[:8]}")
+            _expire = True
+        elif _label in ("substitution", "confirmation", "clarification") and not _is_confirm_reply and not _looks_like_address:
+            # Message looks like a new order, not a YES/NO or address — discard the old state
             emit(f"🔄 [State] New order detected — discarding pending {_label} order {_order.order_id[:8]}")
             _expire = True
         if _expire:
