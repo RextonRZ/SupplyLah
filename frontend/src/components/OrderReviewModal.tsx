@@ -41,6 +41,7 @@ export default function OrderReviewModal({
     fetchLogs();
   }, [order]);
 
+  // Comment
   // Sync calculation on load and when notes change
   useEffect(() => {
     const result = calculateTotalFromJson(notes);
