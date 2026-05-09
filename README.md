@@ -1,4 +1,5 @@
 # SupplyLah
+<img src="public/logo.png" alt="Logo" width="200"/>
 **From Chat. To Chain.**
 
 ## Final Project Documents
